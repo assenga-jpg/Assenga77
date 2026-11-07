@@ -456,7 +456,9 @@ function scImport(url) {
       var w = SC.Widget(f), done = false;
       function fin(v, err) { if (done) return; done = true; clearTimeout(to); try { f.remove(); } catch (e) {} err ? rej(err) : res(v); }
       var to = setTimeout(function () { fin(null, new Error('timeout')); }, 40000);
+      var rt = setTimeout(function () { fin(null, new Error('ikke funnet')); }, 15000);
       w.bind(SC.Widget.Events.READY, function () {
+        clearTimeout(rt);
         // SoundCloud fyller ut låtene litt etter litt, så vi venter til alle har tittel og lenke
         var tries = 0;
         (function poll() {
