@@ -59,8 +59,10 @@ h1{font-size:30px;font-weight:700;letter-spacing:-.02em}
 #bigcov img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 #ytwrap{display:none;width:100%;aspect-ratio:16/9;border-radius:12px;overflow:hidden;background:#000}
 #ytwrap iframe{width:100%;height:100%;border:0}
-#scwrap{display:none;width:100%;border-radius:12px;overflow:hidden}
-#scwrap iframe{width:100%;height:166px;border:0;display:block}
+#scpool{position:fixed;right:0;bottom:0;width:2px;height:2px;overflow:hidden;opacity:.01;pointer-events:none}
+#scpool iframe{width:300px;height:166px;border:0}
+#fsrc{color:var(--mu);font-size:12px;margin-top:6px;min-height:15px}
+#fsrc a{color:var(--mu);text-decoration:underline}
 #imp{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(320px,90vw);height:166px;z-index:80;border:1px solid var(--line);border-radius:12px;background:var(--s1);box-shadow:0 10px 40px #000a}
 #ft{font-size:21px;font-weight:700;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #fa{color:var(--mu);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -100,8 +102,8 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border:0;border-radiu
 
 <div id="full">
   <div class="fh"><button class="ib" id="close" aria-label="Lukk"></button><span>Spilles nå</span><button class="ib" id="fmore" aria-label="Mer"></button></div>
-  <div class="stage"><div id="bigcov"></div><div id="ytwrap"><div id="ytp"></div></div><div id="scwrap"><iframe id="scf" title="SoundCloud" allow="autoplay"></iframe></div></div>
-  <div id="ft"></div><div id="fa"></div>
+  <div class="stage"><div id="bigcov"></div><div id="ytwrap"><div id="ytp"></div></div></div>
+  <div id="ft"></div><div id="fa"></div><div id="fsrc"></div>
   <div class="seek"><input type="range" id="seek" min="0" max="1000" value="0"><div class="times"><span id="tc">0:00</span><span id="td">0:00</span></div></div>
   <div class="ctl">
     <button id="bshuf" aria-label="Bland"></button>
@@ -112,6 +114,7 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border:0;border-radiu
   </div>
 </div>
 
+<div id="scpool"></div>
 <div id="sheetbg"></div><div id="sheet"></div><div id="toast"></div>
 <input type="file" id="files" accept="audio/*,.mp3,.m4a,.aac,.flac,.wav,.ogg,.opus" multiple hidden>
 
@@ -206,97 +209,137 @@ function ytEnsure(vid) {
   });
 }
 // ---- SoundCloud (offisiell innebygd spiller) ----
-var sc = null, scReady = false, scCur = 0, scDur = 0;
+// Én skjult spiller per spilleliste, forhåndslastet i bakgrunnen. Da starter «spill» og «neste» med én gang,
+// og trykket ditt rekker fram til spilleren (iPhone krever et ferskt trykk for å starte lyd).
+var scCur = 0, scDur = 0, scCmd = 0, scW = {}, scCurW = null, scWatch = null;
 function loadSCApi() {
   if (window.SC && SC.Widget) return Promise.resolve();
   return new Promise(function (res, rej) {
     var s = document.createElement('script'); s.src = 'https://w.soundcloud.com/player/api.js'; s.onload = res; s.onerror = rej; document.head.appendChild(s);
   });
 }
-function scSrc(url) { return 'https://w.soundcloud.com/player/?url=' + encodeURIComponent(url) + '&auto_play=true&hide_related=true&show_comments=false&show_user=true&show_reposts=false&visual=false'; }
-// Hele spillelisten lastes i SoundClouds spiller. Da er «neste» rask, og spilleren går selv videre
-// til neste låt, også når skjermen er låst og siden vår står stille.
-var scPl = null, scCmd = 0;
-function scBind() {
-  var T = SC.Widget.Events;
-  sc.bind(T.READY, function () { scReady = true; sc.getDuration(function (ms) { if (ms) scDur = ms / 1000; }); });
-  sc.bind(T.PLAY, function () {
-    if (!S.cur || S.cur.type !== 'sc') return;
+function scSrc(url) { return 'https://w.soundcloud.com/player/?url=' + encodeURIComponent(url) + '&auto_play=false&hide_related=true&show_comments=false&show_user=true&show_reposts=false&visual=false'; }
+function scFlush(e) { e.ready = true; var q = e.todo; e.todo = []; q.forEach(function (fn) { fn(); }); }
+function scEntry(src, key, pl) {
+  if (scW[key]) return scW[key];
+  var e = { key: key, pl: pl, ready: false, todo: [], url: src };
+  var f = document.createElement('iframe'); f.setAttribute('allow', 'autoplay'); f.title = 'SoundCloud';
+  f.src = scSrc(src); $('#scpool').appendChild(f);
+  e.f = f; e.w = SC.Widget(f); scW[key] = e;
+  var T = SC.Widget.Events, w = e.w;
+  w.bind(T.READY, function () { scFlush(e); });
+  w.bind(T.PLAY, function () {
+    if (scCurW !== e || !S.cur || S.cur.type !== 'sc') return;
     setPlaying(true);
-    if (scPl) sc.getCurrentSoundIndex(function (i) { scSync(i); });
+    if (e.pl) w.getCurrentSoundIndex(function (i) { scSync(e, i); });
+    w.getDuration(function (ms) { if (ms && scCurW === e) { scDur = ms / 1000; if (Math.abs(silentLen - (Math.ceil(scDur) + 3)) > 3) silentFor(scDur); } });
   });
-  sc.bind(T.PAUSE, function () { if (S.cur && S.cur.type === 'sc') setPlaying(false); });
-  sc.bind(T.FINISH, function () {
-    if (!S.cur || S.cur.type !== 'sc') return;
+  w.bind(T.PAUSE, function () { if (scCurW === e && S.cur && S.cur.type === 'sc') setPlaying(false); });
+  w.bind(T.FINISH, function () {
+    if (scCurW !== e || !S.cur || S.cur.type !== 'sc') return;
     var n = S.queue[S.qi + 1];
-    if (scPl && n && n.type === 'sc' && n.pl === scPl && n.pi === S.cur.pi + 1) return; // spilleren tar neste selv
+    if (e.pl && n && n.type === 'sc' && n.pl === e.pl && n.pi === S.cur.pi + 1) { setTimeout(scKeepAlive, 1500); setTimeout(scKeepAlive, 4000); return; } // spilleren tar neste selv
     next(true);
   });
-  sc.bind(T.PLAY_PROGRESS, function (d) {
-    if (!S.cur || S.cur.type !== 'sc') return;
-    scCur = d.currentPosition / 1000; if (!scDur) scDur = (S.cur.dur || 0); tick();
+  w.bind(T.PLAY_PROGRESS, function (d) {
+    if (scCurW !== e || !S.cur || S.cur.type !== 'sc') return;
+    scCur = d.currentPosition / 1000; if (!scDur) scDur = S.cur.dur || 0; tick();
+    if (silent && silentLen && Math.abs(silent.currentTime - scCur) > 1.5 && scCur < silentLen) { try { silent.currentTime = scCur; } catch (x) {} }
   });
-  // Rett visningen hvis spilleren og vi er uenige (for eksempel etter avbrudd)
-  setInterval(function () {
-    if (!S.cur || S.cur.type !== 'sc' || !sc || Date.now() - scCmd < 6000) return;
-    sc.isPaused(function (p) { if (p === S.playing) setPlaying(!p); });
-  }, 2000);
+  return e;
 }
-function scSync(i) {
+// Hvis neste låt ikke begynner av seg selv (iPhone kan blokkere det), prøv å starte den
+function scKeepAlive() {
+  if (!scCurW || !S.cur || S.cur.type !== 'sc' || !S.playing) return;
+  var e = scCurW;
+  e.w.isPaused(function (p) { if (p && scCurW === e) { e.w.play(); setTimeout(function () { e.w.isPaused(function (p2) { if (p2 && scCurW === e) setPlaying(false); }); }, 1500); } });
+}
+function scSync(e, i) {
   if (Date.now() - scCmd < 2500) return;
-  if (S.cur && S.cur.pl === scPl && S.cur.pi === i) return;
+  if (S.cur && S.cur.pl === e.pl && S.cur.pi === i) return;
   var j = -1;
-  for (var k = 0; k < S.queue.length; k++) { var q = S.queue[k]; if (q.type === 'sc' && q.pl === scPl && q.pi === i) { j = k; break; } }
+  for (var k = 0; k < S.queue.length; k++) { var q = S.queue[k]; if (q.type === 'sc' && q.pl === e.pl && q.pi === i) { j = k; break; } }
   if (j < 0) return;
   S.qi = j; S.cur = S.queue[j]; scCur = 0; scDur = S.cur.dur || 0;
+  silentFor(scDur || 240);
   paintPlayer(true); markPlaying(); mediaMeta(S.cur);
-  sc.getDuration(function (ms) { if (ms) scDur = ms / 1000; });
+  e.w.getDuration(function (ms) { if (ms) scDur = ms / 1000; });
 }
 function scStart(t) {
   return loadSCApi().then(function () {
     scCmd = Date.now();
-    var usePl = !!t.pl && !S.shuffle && S.repeat !== 2;
-    var src = usePl ? t.pl : t.url, opts = { auto_play: true, show_comments: false, hide_related: true, visual: false };
-    if (usePl) opts.start_track = t.pi;
-    if (sc) {
-      if (usePl && scPl === t.pl) { sc.skip(t.pi); sc.play(); return; }
-      scPl = usePl ? t.pl : null;
-      sc.load(src, opts); return;
+    var usePl = !!t.pl && !S.shuffle && S.repeat !== 2, e;
+    if (usePl) {
+      e = scEntry(t.pl, t.pl, t.pl);
+      try { localStorage.setItem('selah.lastPl', t.pl); } catch (x) {}
+    } else {
+      e = scEntry(t.url, 'single', null);
+      if (e.url !== t.url) {
+        e.url = t.url; e.ready = false; e.todo = [];
+        e.w.load(t.url, { auto_play: false, show_comments: false, hide_related: true, visual: false, callback: function () { scFlush(e); } });
+      }
     }
-    scPl = usePl ? t.pl : null;
-    var f = $('#scf'); f.src = scSrc(src) + (usePl ? '&start_track=' + t.pi : '');
-    sc = SC.Widget(f); scBind();
+    if (scCurW && scCurW !== e) { try { scCurW.w.pause(); } catch (x) {} }
+    scCurW = e;
+    var go = function () { if (usePl) e.w.skip(t.pi); e.w.play(); };
+    if (e.ready) go(); else e.todo.push(go);
+    clearTimeout(scWatch);
+    scWatch = setTimeout(function () {
+      e.w.isPaused(function (p) { if (p && scCurW === e && S.cur === t) { setPlaying(false); toast('Trykk play for å starte'); } });
+    }, 6000);
   });
 }
-// Lydløs lyd fra siden vår mens SoundCloud spiller: da er det Selah som eier låseskjermen, med forrige/neste-knapper
-var silent = null;
-function silentAudio() {
-  if (silent) return silent;
-  var sr = 8000, n = sr, b = new ArrayBuffer(44 + n * 2), v = new DataView(b);
+// Forhåndslast spillerne for alle spillelistene, en om gangen, så de er klare når du trykker
+function scPreload() {
+  var pls = [];
+  S.tracks.forEach(function (t) { if (t.type === 'sc' && t.pl && pls.indexOf(t.pl) < 0) pls.push(t.pl); });
+  var last = ''; try { last = localStorage.getItem('selah.lastPl') || ''; } catch (e) {}
+  pls.sort(function (a, b) { return (b === last) - (a === last); });
+  if (!pls.length) return;
+  loadSCApi().then(function () {
+    pls.slice(0, 8).forEach(function (pl, i) { setTimeout(function () { try { scEntry(pl, pl, pl); } catch (e) {} }, 600 + i * 2500); });
+  }).catch(function () {});
+}
+// Lydløst spor fra siden vår, like langt som sangen, mens SoundCloud spiller.
+// Da eier Selah låseskjermen (riktig tittel, tid og knapper), og lyd-økten holdes i live.
+var silent = null, silentLen = 0, silentUrl = null;
+function silentFor(dur) {
+  dur = Math.max(10, Math.ceil(dur) + 3);
+  if (silent && silentLen === dur) return silent;
+  var sr = 8000, n = sr * dur, b = new Uint8Array(44 + n), v = new DataView(b.buffer);
   function q(o, s) { for (var i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); }
-  q(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); q(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); q(36, 'data'); v.setUint32(40, n * 2, true);
-  silent = new Audio(URL.createObjectURL(new Blob([b], { type: 'audio/wav' }))); silent.loop = true;
+  b.fill(128, 44);
+  q(0, 'RIFF'); v.setUint32(4, 36 + n, true); q(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true); q(36, 'data'); v.setUint32(40, n, true);
+  var url = URL.createObjectURL(new Blob([b], { type: 'audio/wav' }));
+  var wasOn = silent && !silent.paused;
+  if (!silent) silent = new Audio();
+  silent.src = url; silentLen = dur;
+  if (silentUrl) URL.revokeObjectURL(silentUrl);
+  silentUrl = url;
+  if (wasOn) { var p = silent.play(); if (p && p.catch) p.catch(function () {}); }
   return silent;
 }
 function silentPlay(on) {
-  try { var s = silentAudio(); if (on) { var p = s.play(); if (p && p.catch) p.catch(function () {}); } else s.pause(); } catch (e) {}
+  try {
+    if (on) { silentFor((S.cur && S.cur.dur) || scDur || 240); var p = silent.play(); if (p && p.catch) p.catch(function () {}); }
+    else if (silent) silent.pause();
+  } catch (e) {}
 }
 function stopAll(keepSc) {
   audio.pause(); clearInterval(ytTimer);
   if (!keepSc && silent) silent.pause();
   if (yt && ytReady) { try { yt.pauseVideo(); } catch (e) {} }
-  if (sc && !keepSc) { try { sc.pause(); } catch (e) {} }
+  if (scCurW && !keepSc) { try { scCurW.w.pause(); } catch (e) {} }
 }
 function setPlaying(p) { S.playing = p; if (S.cur && S.cur.type === 'sc') silentPlay(p); paintPlayer(); if ('mediaSession' in navigator) navigator.mediaSession.playbackState = p ? 'playing' : 'paused'; }
 
 function playTrack(t) {
   stopAll(t.type === 'sc'); S.cur = t; ytCur = ytDur = 0; scCur = 0; scDur = t.dur || 0;
-  $('#scwrap').style.display = t.type === 'sc' ? 'block' : 'none';
   paintPlayer(true); markPlaying();
   if (t.type === 'sc') {
-    $('#ytwrap').style.display = 'none'; $('#bigcov').style.display = 'none';
-    silentPlay(true);
+    $('#ytwrap').style.display = 'none'; $('#bigcov').style.display = 'flex';
+    silentFor(t.dur || 240); silentPlay(true);
     scStart(t).catch(function () { toast('Fikk ikke kontakt med SoundCloud'); setPlaying(false); });
     setPlaying(true);
   } else if (t.type === 'yt') {
@@ -338,17 +381,23 @@ function tick() {
   var c = curTime(), d = curDur();
   $('#tc').textContent = fmt(c); $('#td').textContent = fmt(d);
   if (!dragging) { var v = d ? Math.round(c / d * 1000) : 0; $('#seek').value = v; $('#seek').style.setProperty('--p', (v / 10) + '%'); }
-  if ('mediaSession' in navigator && navigator.mediaSession.setPositionState && d && S.cur && S.cur.type !== 'yt' && S.cur.type !== 'sc') {
-    try { navigator.mediaSession.setPositionState({ duration: d, position: Math.min(c, d), playbackRate: 1 }); } catch (e) {}
-  }
+  posState(false);
+}
+// Fortell låseskjermen hvor langt vi er (maks én gang i sekundet)
+var posT = 0;
+function posState(force) {
+  if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState || !S.cur || S.cur.type === 'yt') return;
+  var now = Date.now(); if (!force && now - posT < 1000) return; posT = now;
+  var d = curDur(), c = curTime(); if (!d) return;
+  try { navigator.mediaSession.setPositionState({ duration: d, position: Math.max(0, Math.min(c, d)), playbackRate: 1 }); } catch (e) {}
 }
 function seekTo(sec) {
-  if (S.cur && S.cur.type === 'sc') { if (sc) { sc.seekTo(sec * 1000); scCur = sec; } }
+  if (S.cur && S.cur.type === 'sc') { if (scCurW) { scCurW.w.seekTo(sec * 1000); scCur = sec; if (silent && sec < silentLen) { try { silent.currentTime = sec; } catch (e) {} } posState(true); } }
   else if (S.cur && S.cur.type === 'yt') { if (yt && ytReady) yt.seekTo(sec, true); } else audio.currentTime = sec;
 }
 function toggle() {
   if (!S.cur) { if (S.visible.length) playQueue(S.visible, 0); return; }
-  if (S.cur.type === 'sc') { if (sc) sc.toggle(); return; }
+  if (S.cur.type === 'sc') { if (scCurW) scCurW.w.toggle(); return; }
   if (S.cur.type === 'yt') { if (yt && ytReady) { S.playing ? yt.pauseVideo() : yt.playVideo(); } }
   else { if (audio.paused) { var p = audio.play(); if (p && p.catch) p.catch(function () {}); } else audio.pause(); }
 }
@@ -371,17 +420,22 @@ function playNext(t) { if (!S.queue.length) { playQueue([t], 0); return; } S.que
 function mediaMeta(t) {
   if (!('mediaSession' in navigator)) return;
   try {
-    navigator.mediaSession.metadata = new MediaMetadata({ title: t.title, artist: t.artist || '', album: 'Selah', artwork: t.art ? [{ src: t.art, sizes: '480x480' }] : [{ src: 'icon-512.png', sizes: '512x512', type: 'image/png' }] });
+    var art = t.art ? t.art.replace('t300x300', 't500x500') : '';
+    navigator.mediaSession.metadata = new MediaMetadata({ title: t.title, artist: t.artist || '', album: 'Selah', artwork: art ? [{ src: art, sizes: '500x500' }] : [{ src: 'icon-512.png', sizes: '512x512', type: 'image/png' }] });
   } catch (e) {}
 }
+function prevTrack() { if (!S.queue.length) return; S.qi = (S.qi - 1 + S.queue.length) % S.queue.length; playTrack(S.queue[S.qi]); }
 if ('mediaSession' in navigator) {
   var ms = navigator.mediaSession;
   [['play', toggle], ['pause', toggle], ['previoustrack', prev], ['nexttrack', function () { next(false); }],
    ['seekto', function (d) { if (d.seekTime != null) seekTo(d.seekTime); }]
   ].forEach(function (a) { try { ms.setActionHandler(a[0], a[1]); } catch (e) {} });
-  // Ingen «spol 10 sek»-knapper: da viser iPhone forrige og neste låt i stedet
-  ['seekbackward', 'seekforward'].forEach(function (a) { try { ms.setActionHandler(a, null); } catch (e) {} });
+  // iPhone viser ofte «10 sek»-knapper på låseskjermen uansett hva vi ber om. Derfor styrer vi dem:
+  // for SoundCloud-låter bytter de sang (framover = neste, bakover = forrige). For andre låter spoler de 10 sek.
+  try { ms.setActionHandler('seekforward', function () { if (S.cur && S.cur.type === 'sc') next(false); else seekTo(curTime() + 10); }); } catch (e) {}
+  try { ms.setActionHandler('seekbackward', function () { if (S.cur && S.cur.type === 'sc') prevTrack(); else seekTo(Math.max(0, curTime() - 10)); }); } catch (e) {}
 }
+document.addEventListener('visibilitychange', function () { if (!document.hidden && S.cur && S.cur.type === 'sc') { scKeepAlive(); } });
 
 // ---------- tegn spilleren ----------
 function paintPlayer(full) {
@@ -394,7 +448,11 @@ function paintPlayer(full) {
   if (full !== undefined) {
     $('#ft').textContent = t.title; $('#fa').textContent = t.artist || '';
     var bc = $('#bigcov'); bc.style.cssText = covStyle(t); bc.innerHTML = coverHtml(t);
-    if (t.type === 'yt' || t.type === 'sc') { bc.style.display = 'none'; }
+    if (t.type === 'yt') { bc.style.display = 'none'; }
+    var big = $('#bigcov img'); if (big && t.art) big.src = t.art.replace('t300x300', 't500x500');
+    var src = $('#fsrc');
+    if (t.type === 'sc') { src.innerHTML = 'Spilles via SoundCloud · <a href="' + esc(t.url) + '" target="_blank" rel="noopener">Åpne i SoundCloud</a>'; }
+    else src.textContent = '';
   }
   $('#bshuf').className = S.shuffle ? 'on' : '';
   $('#brep').className = S.repeat ? 'on' : '';
@@ -436,11 +494,15 @@ function render() {
     if (S.openList) {
       var L = S.lists.filter(function (l) { return l.id === S.openList; })[0];
       if (!L) { S.openList = null; return render(); }
-      var tr = L.ids.map(function (id) { return S.tracks.filter(function (t) { return t.id === id; })[0]; }).filter(Boolean);
+      var byId = {}; S.tracks.forEach(function (t) { byId[t.id] = t; });
+      var all = L.ids.map(function (id) { return byId[id]; }).filter(Boolean);
+      var lf = (S.lf || '').toLowerCase().trim();
+      var tr = all.filter(function (t) { return !lf || (t.title + ' ' + (t.artist || '')).toLowerCase().indexOf(lf) >= 0; });
       S.visible = tr;
       h += '<div class="top"><h1>' + esc(L.name) + '</h1><button class="ib" id="listmenu" aria-label="Mer">' + I.more + '</button></div>';
-      h += '<div class="bar"><button class="btn" id="back">Tilbake</button>' + (tr.length ? '<button class="btn p" id="playall">Spill</button><button class="btn" id="shufall">Bland</button>' : '') + '</div>';
-      h += tr.map(row).join('') || '<div class="empty"><b>Tom liste</b>Åpne menyen på en sang i biblioteket og velg «Legg i spilleliste».</div>';
+      h += '<input class="field" id="lflt" placeholder="Søk i «' + esc(L.name) + '» (' + all.length + ' sanger)" value="' + esc(S.lf || '') + '">';
+      h += '<div class="bar" style="margin-top:12px"><button class="btn" id="back">Tilbake</button>' + (tr.length ? '<button class="btn p" id="playall">' + (lf ? 'Spill treff' : 'Spill') + '</button><button class="btn" id="shufall">Bland</button>' : '') + '</div>';
+      h += tr.map(row).join('') || (lf ? '<div class="empty">Ingen treff i listen.</div>' : '<div class="empty"><b>Tom liste</b>Åpne menyen på en sang i biblioteket og velg «Legg i spilleliste».</div>');
     } else {
       S.visible = [];
       h += '<div class="top"><h1>Lister</h1><button class="add" id="newlist">' + I.plus + 'Ny</button></div>';
@@ -455,16 +517,27 @@ function render() {
 function paintResults() {
   var r = $('#res'); if (!r) return;
   if (S.searching) { r.innerHTML = '<div class="empty">Søker …</div>'; return; }
-  if (!S.results) { r.innerHTML = '<div class="empty"><b>Gratis musikk fra Audius</b>Reklamefri streaming. Mye hiphop og uavhengige artister. Større artister finner du ikke her.</div>'; S.visible = []; return; }
-  S.visible = S.results;
-  r.innerHTML = S.results.length ? S.results.map(function (t, i) {
-    var saved = S.tracks.some(function (x) { return x.id === t.id; });
-    return row(t, i).replace('</button></div>', '</button>' + '</div>').replace('<button class="ib" data-more', '<button class="ib" data-save="' + i + '" aria-label="Lagre" ' + (saved ? 'style="color:var(--ac)"' : '') + '>' + (saved ? '✓' : I.plus) + '</button><button class="ib" data-more');
-  }).join('') : '<div class="empty">Ingen treff.</div>';
+  var q = (S.q || '').toLowerCase().trim(), local = [];
+  if (q) local = S.tracks.filter(function (t) { return (t.title + ' ' + (t.artist || '')).toLowerCase().indexOf(q) >= 0; }).sort(function (a, b) { return b.added - a.added; }).slice(0, 150);
+  var res = S.results || [];
+  S.visible = local.concat(res);
+  var h = '';
+  if (q) h += '<div class="sec">I biblioteket (' + local.length + ')</div>' + (local.map(row).join('') || '<div class="s" style="padding:6px 0">Ingen treff i biblioteket.</div>');
+  if (!S.results) {
+    h += q ? '<div class="note">Trykk søk på tastaturet for å søke etter gratis musikk på Audius.</div>' : '<div class="empty"><b>Søk i alt du har</b>Skriv for å finne en bestemt sang i biblioteket og spillelistene dine. Trykk søk for å lete etter gratis musikk på Audius.</div>';
+  } else {
+    h += '<div class="sec">Audius (gratis)</div>';
+    h += res.length ? res.map(function (t, k) {
+      var i = local.length + k, saved = S.tracks.some(function (x) { return x.id === t.id; });
+      return row(t, i).replace('<button class="ib" data-more', '<button class="ib" data-save="' + i + '" aria-label="Lagre" ' + (saved ? 'style="color:var(--ac)"' : '') + '>' + (saved ? '✓' : I.plus) + '</button><button class="ib" data-more');
+    }).join('') : '<div class="s" style="padding:6px 0">Ingen treff på Audius.</div>';
+  }
+  r.innerHTML = h;
   markPlaying();
 }
 function doSearch(q) {
   q = (q || '').trim(); S.q = q; if (!q) { S.results = null; paintResults(); return; }
+  if (q.length < 2) { paintResults(); return; }
   S.searching = true; paintResults();
   audHost().then(function (h) { return fetch(h + '/v1/tracks/search?query=' + encodeURIComponent(q) + '&app_name=selah&limit=30'); })
     .then(function (r) { return r.json(); }).then(function (j) {
@@ -561,7 +634,7 @@ function importPresets() {
     });
   });
   return chain.then(function () {
-    render();
+    render(); scPreload();
     openSheet('Ferdig', res.map(function (r) { return { label: r, fn: function () {} }; }));
   });
 }
@@ -666,11 +739,13 @@ document.addEventListener('click', function (e) {
   if ((el = t.closest('[data-chip]'))) { S.q = el.getAttribute('data-chip'); $('#q').value = S.q; return doSearch(S.q); }
   if ((el = t.closest('[data-more]'))) { var i = +el.getAttribute('data-more'); return trackMenu(S.visible[i], i); }
   if ((el = t.closest('[data-save]'))) { var tr = S.visible[+el.getAttribute('data-save')]; return addTrack(tr).then(function () { toast('Lagret i biblioteket'); }); }
-  if ((el = t.closest('[data-list]'))) { S.openList = el.getAttribute('data-list'); return render(); }
+  if ((el = t.closest('[data-list]'))) { S.openList = el.getAttribute('data-list'); S.lf = ''; return render(); }
   if ((el = t.closest('.row[data-i]'))) { var idx = +el.getAttribute('data-i'); return playQueue(S.visible, idx); }
   if (t.closest('#mini')) { $('#full').classList.add('open'); return; }
 });
 document.addEventListener('input', function (e) {
+  if (e.target.id === 'q') { S.q = e.target.value; S.results = null; paintResults(); return; }
+  if (e.target.id === 'lflt') { S.lf = e.target.value; var p2 = e.target.selectionStart; render(); var g = $('#lflt'); if (g) { g.focus(); g.setSelectionRange(p2, p2); } return; }
   if (e.target.id === 'flt') { S.filter = e.target.value; var pos = e.target.selectionStart; render(); var f = $('#flt'); if (f) { f.focus(); f.setSelectionRange(pos, pos); } }
 });
 document.addEventListener('keydown', function (e) { if (e.target.id === 'q' && e.key === 'Enter') { e.target.blur(); doSearch(e.target.value); } });
@@ -688,7 +763,7 @@ sk.addEventListener('change', function () { seekTo(sk.value / 1000 * curDur()); 
 
 // ---------- start ----------
 openDB().then(dbAll).then(function (all) {
-  S.tracks = all; render(); paintPlayer();
+  S.tracks = all; render(); paintPlayer(); scPreload();
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
 });
 if ('serviceWorker' in navigator && /^https?:/.test(location.protocol)) {
