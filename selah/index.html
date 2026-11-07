@@ -206,7 +206,7 @@ function ytEnsure(vid) {
   });
 }
 // ---- SoundCloud (offisiell innebygd spiller) ----
-var sc = null, scReady = false, scCur = 0, scDur = 0, scWant = null;
+var sc = null, scReady = false, scCur = 0, scDur = 0;
 function loadSCApi() {
   if (window.SC && SC.Widget) return Promise.resolve();
   return new Promise(function (res, rej) {
@@ -214,37 +214,89 @@ function loadSCApi() {
   });
 }
 function scSrc(url) { return 'https://w.soundcloud.com/player/?url=' + encodeURIComponent(url) + '&auto_play=true&hide_related=true&show_comments=false&show_user=true&show_reposts=false&visual=false'; }
+// Hele spillelisten lastes i SoundClouds spiller. Da er «neste» rask, og spilleren går selv videre
+// til neste låt, også når skjermen er låst og siden vår står stille.
+var scPl = null, scCmd = 0;
+function scBind() {
+  var T = SC.Widget.Events;
+  sc.bind(T.READY, function () { scReady = true; sc.getDuration(function (ms) { if (ms) scDur = ms / 1000; }); });
+  sc.bind(T.PLAY, function () {
+    if (!S.cur || S.cur.type !== 'sc') return;
+    setPlaying(true);
+    if (scPl) sc.getCurrentSoundIndex(function (i) { scSync(i); });
+  });
+  sc.bind(T.PAUSE, function () { if (S.cur && S.cur.type === 'sc') setPlaying(false); });
+  sc.bind(T.FINISH, function () {
+    if (!S.cur || S.cur.type !== 'sc') return;
+    var n = S.queue[S.qi + 1];
+    if (scPl && n && n.type === 'sc' && n.pl === scPl && n.pi === S.cur.pi + 1) return; // spilleren tar neste selv
+    next(true);
+  });
+  sc.bind(T.PLAY_PROGRESS, function (d) {
+    if (!S.cur || S.cur.type !== 'sc') return;
+    scCur = d.currentPosition / 1000; if (!scDur) scDur = (S.cur.dur || 0); tick();
+  });
+  // Rett visningen hvis spilleren og vi er uenige (for eksempel etter avbrudd)
+  setInterval(function () {
+    if (!S.cur || S.cur.type !== 'sc' || !sc || Date.now() - scCmd < 6000) return;
+    sc.isPaused(function (p) { if (p === S.playing) setPlaying(!p); });
+  }, 2000);
+}
+function scSync(i) {
+  if (Date.now() - scCmd < 2500) return;
+  if (S.cur && S.cur.pl === scPl && S.cur.pi === i) return;
+  var j = -1;
+  for (var k = 0; k < S.queue.length; k++) { var q = S.queue[k]; if (q.type === 'sc' && q.pl === scPl && q.pi === i) { j = k; break; } }
+  if (j < 0) return;
+  S.qi = j; S.cur = S.queue[j]; scCur = 0; scDur = S.cur.dur || 0;
+  paintPlayer(true); markPlaying(); mediaMeta(S.cur);
+  sc.getDuration(function (ms) { if (ms) scDur = ms / 1000; });
+}
 function scStart(t) {
   return loadSCApi().then(function () {
-    var T = SC.Widget.Events;
-    if (sc) { scWant = t.id; sc.load(t.url, { auto_play: true, show_comments: false, hide_related: true, visual: false }); return; }
-    scWant = t.id;
-    var f = $('#scf'); f.src = scSrc(t.url);
-    sc = SC.Widget(f);
-    sc.bind(T.READY, function () { scReady = true; });
-    sc.bind(T.PLAY, function () { if (S.cur && S.cur.type === 'sc') setPlaying(true); });
-    sc.bind(T.PAUSE, function () { if (S.cur && S.cur.type === 'sc') setPlaying(false); });
-    sc.bind(T.FINISH, function () { if (S.cur && S.cur.type === 'sc') next(true); });
-    sc.bind(T.PLAY_PROGRESS, function (d) {
-      if (!S.cur || S.cur.type !== 'sc') return;
-      scCur = d.currentPosition / 1000; if (!scDur) scDur = (S.cur.dur || 0); tick();
-    });
-    sc.bind(T.READY, function () { sc.getDuration(function (ms) { scDur = ms / 1000; }); });
+    scCmd = Date.now();
+    var usePl = !!t.pl && !S.shuffle && S.repeat !== 2;
+    var src = usePl ? t.pl : t.url, opts = { auto_play: true, show_comments: false, hide_related: true, visual: false };
+    if (usePl) opts.start_track = t.pi;
+    if (sc) {
+      if (usePl && scPl === t.pl) { sc.skip(t.pi); sc.play(); return; }
+      scPl = usePl ? t.pl : null;
+      sc.load(src, opts); return;
+    }
+    scPl = usePl ? t.pl : null;
+    var f = $('#scf'); f.src = scSrc(src) + (usePl ? '&start_track=' + t.pi : '');
+    sc = SC.Widget(f); scBind();
   });
 }
-function stopAll() {
-  audio.pause(); clearInterval(ytTimer);
-  if (yt && ytReady) { try { yt.pauseVideo(); } catch (e) {} }
-  if (sc) { try { sc.pause(); } catch (e) {} }
+// Lydløs lyd fra siden vår mens SoundCloud spiller: da er det Selah som eier låseskjermen, med forrige/neste-knapper
+var silent = null;
+function silentAudio() {
+  if (silent) return silent;
+  var sr = 8000, n = sr, b = new ArrayBuffer(44 + n * 2), v = new DataView(b);
+  function q(o, s) { for (var i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); }
+  q(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); q(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); q(36, 'data'); v.setUint32(40, n * 2, true);
+  silent = new Audio(URL.createObjectURL(new Blob([b], { type: 'audio/wav' }))); silent.loop = true;
+  return silent;
 }
-function setPlaying(p) { S.playing = p; paintPlayer(); if ('mediaSession' in navigator) navigator.mediaSession.playbackState = p ? 'playing' : 'paused'; }
+function silentPlay(on) {
+  try { var s = silentAudio(); if (on) { var p = s.play(); if (p && p.catch) p.catch(function () {}); } else s.pause(); } catch (e) {}
+}
+function stopAll(keepSc) {
+  audio.pause(); clearInterval(ytTimer);
+  if (!keepSc && silent) silent.pause();
+  if (yt && ytReady) { try { yt.pauseVideo(); } catch (e) {} }
+  if (sc && !keepSc) { try { sc.pause(); } catch (e) {} }
+}
+function setPlaying(p) { S.playing = p; if (S.cur && S.cur.type === 'sc') silentPlay(p); paintPlayer(); if ('mediaSession' in navigator) navigator.mediaSession.playbackState = p ? 'playing' : 'paused'; }
 
 function playTrack(t) {
-  stopAll(); S.cur = t; ytCur = ytDur = 0; scCur = 0; scDur = t.dur || 0;
+  stopAll(t.type === 'sc'); S.cur = t; ytCur = ytDur = 0; scCur = 0; scDur = t.dur || 0;
   $('#scwrap').style.display = t.type === 'sc' ? 'block' : 'none';
   paintPlayer(true); markPlaying();
   if (t.type === 'sc') {
     $('#ytwrap').style.display = 'none'; $('#bigcov').style.display = 'none';
+    silentPlay(true);
     scStart(t).catch(function () { toast('Fikk ikke kontakt med SoundCloud'); setPlaying(false); });
     setPlaying(true);
   } else if (t.type === 'yt') {
@@ -325,10 +377,10 @@ function mediaMeta(t) {
 if ('mediaSession' in navigator) {
   var ms = navigator.mediaSession;
   [['play', toggle], ['pause', toggle], ['previoustrack', prev], ['nexttrack', function () { next(false); }],
-   ['seekto', function (d) { if (d.seekTime != null) seekTo(d.seekTime); }],
-   ['seekbackward', function () { seekTo(Math.max(0, curTime() - 10)); }],
-   ['seekforward', function () { seekTo(curTime() + 10); }]
+   ['seekto', function (d) { if (d.seekTime != null) seekTo(d.seekTime); }]
   ].forEach(function (a) { try { ms.setActionHandler(a[0], a[1]); } catch (e) {} });
+  // Ingen «spol 10 sek»-knapper: da viser iPhone forrige og neste låt i stedet
+  ['seekbackward', 'seekforward'].forEach(function (a) { try { ms.setActionHandler(a, null); } catch (e) {} });
 }
 
 // ---------- tegn spilleren ----------
@@ -467,7 +519,7 @@ function scImport(url) {
             var ok = arr.filter(function (s) { return s && s.permalink_url; }).length;
             if (arr.length && ok === arr.length) return fin(arr);
             if (!arr.length && tries > 2) return w.getCurrentSound(function (s) { fin(s ? [s] : []); });
-            if (++tries > 40) return fin(arr.filter(function (s) { return s && s.permalink_url; }));
+            if (++tries > 40) return fin(arr);
             setTimeout(poll, 1500);
           });
         })();
@@ -475,8 +527,43 @@ function scImport(url) {
     });
   });
 }
-function scToTrack(s, i) {
-  return { id: 's_' + s.id, type: 'sc', url: s.permalink_url, title: s.title || 'SoundCloud', artist: (s.user && s.user.username) || '', art: (s.artwork_url || '').replace('-large', '-t300x300'), dur: (s.duration || 0) / 1000, added: Date.now() + i };
+function scToTrack(s, i, pl, pi) {
+  // added synker med plassen i listen, så «nyeste først» gir samme rekkefølge som i SoundCloud
+  var t = { id: 's_' + s.id, type: 'sc', url: s.permalink_url, title: s.title || 'SoundCloud', artist: (s.user && s.user.username) || '', art: (s.artwork_url || '').replace('-large', '-t300x300'), dur: (s.duration || 0) / 1000, added: Date.now() - i };
+  if (pl) { t.pl = pl; t.pi = pi; }
+  return t;
+}
+function saveTracks(tracks) {
+  var chain = Promise.resolve();
+  tracks.forEach(function (t) { chain = chain.then(function () { return dbPut(t).then(function () { S.tracks = S.tracks.filter(function (x) { return x.id !== t.id; }); S.tracks.push(t); }); }); });
+  return chain;
+}
+var SC_SETS = 'https://soundcloud.com/user-637165933-124776751/sets/';
+var PRESETS = [['Godly playlist', 'godly-playlist'], ['Beats', 'beats'], ['Allez', 'allez'], ['Houseparty', 'houseparty'], ['Gym', 'gym'], ['Afro', 'afro']];
+function importPresets() {
+  var res = [], chain = Promise.resolve();
+  PRESETS.forEach(function (p, n) {
+    chain = chain.then(function () {
+      toast('Henter «' + p[0] + '» (' + (n + 1) + ' av ' + PRESETS.length + ') …');
+      var url = SC_SETS + p[1];
+      return scImport(url).then(function (arr) {
+        var tracks = [];
+        arr.forEach(function (s, i) { if (s && s.permalink_url) tracks.push(scToTrack(s, i, url, i)); });
+        if (!tracks.length) { res.push(p[0] + ': fant ingen låter'); return; }
+        return saveTracks(tracks).then(function () {
+          var L = S.lists.filter(function (l) { return l.name.toLowerCase() === p[0].toLowerCase() || (p[1] === 'godly-playlist' && /godly/i.test(l.name)); })[0];
+          if (!L) { L = { id: uid(), name: p[0], ids: [] }; S.lists.push(L); }
+          tracks.forEach(function (t) { if (L.ids.indexOf(t.id) < 0) L.ids.push(t.id); });
+          saveLists();
+          res.push(p[0] + ': ' + tracks.length + (arr.length !== tracks.length ? ' av ' + arr.length : '') + ' låter');
+        });
+      }).catch(function () { res.push(p[0] + ': feilet, prøv igjen'); });
+    });
+  });
+  return chain.then(function () {
+    render();
+    openSheet('Ferdig', res.map(function (r) { return { label: r, fn: function () {} }; }));
+  });
 }
 function scPrompt() {
   ask('SoundCloud-lenke', 'Lenke til låt eller spilleliste', 'Legg til', function (url) {
@@ -484,11 +571,10 @@ function scPrompt() {
     url = url.trim().split('?')[0];
     toast('Henter fra SoundCloud …');
     scImport(url).then(function (arr) {
-      arr = arr.filter(function (s) { return s && s.permalink_url; });
-      if (!arr.length) { toast('Fant ingen låter. Er lenken privat?'); return; }
-      var tracks = arr.map(scToTrack), chain = Promise.resolve();
-      tracks.forEach(function (t) { chain = chain.then(function () { return dbPut(t).then(function () { S.tracks = S.tracks.filter(function (x) { return x.id !== t.id; }); S.tracks.push(t); }); }); });
-      return chain.then(function () {
+      if (!arr.filter(function (s) { return s && s.permalink_url; }).length) { toast('Fant ingen låter. Er lenken privat?'); return; }
+      var isSet = /\/sets\//.test(url), tracks = [];
+      arr.forEach(function (s, i) { if (s && s.permalink_url) tracks.push(scToTrack(s, i, isSet ? url : null, i)); });
+      return saveTracks(tracks).then(function () {
         if (S.tab === 'lib') render();
         toast(tracks.length + (tracks.length === 1 ? ' låt lagt til' : ' låter lagt til'));
         if (tracks.length > 1) setTimeout(function () { offerList(tracks); }, 2300);
@@ -503,6 +589,7 @@ function offerList(tracks) {
 }
 function addMenu() {
   openSheet('Legg til musikk', [
+    { label: 'Importer alle mine SoundCloud-spillelister', sub: 'Godly playlist, Beats, Allez, Houseparty, Gym og Afro. Lager lister automatisk (tar ca. 1–2 min)', fn: importPresets },
     { label: 'Lim inn SoundCloud-lenke', sub: 'Låt eller hel spilleliste. Spilles med SoundClouds egen spiller', fn: scPrompt },
     { label: 'Velg lydfiler fra telefonen', sub: 'MP3, M4A, FLAC, WAV. Bare musikk du eier eller har lov til å ha.', fn: function () { $('#files').click(); } },
     { label: 'Lim inn YouTube-lenke', sub: 'Spilles med YouTubes egen spiller (med reklame, og uten bakgrunnsavspilling på iPhone)', fn: ytPrompt }
