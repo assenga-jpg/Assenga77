@@ -416,11 +416,19 @@ async function fbStart(){
     firebase.initializeApp(FBCFG);FBAUTH=firebase.auth();
     FBAUTH.onAuthStateChanged(async u=>{FBUSER=u;
       if(!u){DBDOC=null;syncMsg="Ikke innlogget. Lagres på denne enheten.";if(!SS)render();return}
-      try{DBDOC=firebase.firestore().doc("users/"+u.uid);
-        const snap=await DBDOC.get();const local=lsLoad();
-        if(snap.exists){ST=fillDefaults(mergeState(local,snap.data()));syncMsg="Synket i skyen"}
-        else{syncMsg="Synket i skyen";flush()}
-        lsSave();
+      try{const doc=firebase.firestore().doc("users/"+u.uid);
+        const snap=await doc.get();const local=lsLoad();const cloud=snap.exists?snap.data():null;
+        const prog=s=>s?((s.xp||0)+(s.log||[]).length+Object.keys(s.words||{}).length):0;
+        let linked=null;try{linked=localStorage.getItem("safari_linked")}catch(e){}
+        const finish=(keep)=>{ST=fillDefaults(keep);DBDOC=doc;syncMsg="Synket i skyen";try{localStorage.setItem("safari_linked",u.uid)}catch(e){}lsSave();flush();applyTheme();if(!SS)render()};
+        if(!cloud){DBDOC=doc;try{localStorage.setItem("safari_linked",u.uid)}catch(e){}syncMsg="Synket i skyen";if(prog(local)>0||(local&&local.profile&&local.profile.onboarded)){ST=fillDefaults(local);flush()}else flush();lsSave()}
+        else if(linked===u.uid||prog(local)===0){finish(linked===u.uid?mergeState(local,cloud):cloud);return}
+        else{ // første innlogging på denne enheten, og begge har fremgang: la brukeren velge
+          const info=(s)=>`${s.profile&&s.profile.name||"?"} · ${s.xp||0} XP · ${Object.keys(s.words||{}).length} ord`;
+          const sh=sheet(`<h2 style="margin-bottom:8px">Hvilken fremgang vil du beholde?</h2><p class="muted">Både denne enheten og skyen har fremgang. Den du ikke velger, blir overskrevet.</p><div style="display:grid;gap:10px;margin-top:14px"><button class="btn" id="keepCloud">Fra skyen<br><small>${esc(info(cloud))}</small></button><button class="btn ghost" id="keepLocal">Fra denne enheten<br><small>${esc(info(local))}</small></button></div>`);
+          sh.querySelector("#keepCloud").onclick=()=>{sh.close();finish(cloud)};
+          sh.querySelector("#keepLocal").onclick=()=>{sh.close();finish(local)};
+          return}
       }catch(e){DBDOC=null;syncMsg="Skysynk feilet. Lagres på denne enheten."}
       if(!SS){applyTheme();render()}});
   }catch(e){syncMsg="Skysynk ikke tilgjengelig. Lagres på denne enheten."}}
@@ -674,11 +682,11 @@ function bindSound(box,again){box.querySelectorAll(".sw-t").forEach(b=>b.onclick
 /* ---- onboarding ---- */
 function renderOnboard(){
   return `<div class="hero"><div><div style="display:flex;align-items:center;gap:12px"><div class="logo2">Safari</div>${flag(40)}</div><div class="tzline"></div><h1 style="margin-top:6px">Sett opp profilen din</h1><p class="muted" style="margin:6px 0 0">Tar to minutter. Alt kan endres senere under «Meg».</p></div>
+  ${FBCFG&&!window.claude&&!FBUSER?`<div class="card" style="border:2px solid var(--accent,#1a9c5b)"><b>Har du brukt Safari på en annen enhet?</b><div class="muted" style="font-size:14px;margin:4px 0 10px">Logg inn først, så henter vi fremgangen din og du slipper å starte på nytt.</div><div id="obSync">${syncCardHTML()}</div></div>`:`<div id="obSync">${syncCardHTML()}</div>`}
   <div class="card"><div class="field"><label for="obName">Navn</label><input id="obName" class="inp" value="${esc(ST.profile.name||'William')}" maxlength="24" autocomplete="off"></div>
   <div class="field" style="margin-bottom:0"><label>Avatar</label><div class="avs" id="obAv">${AVATARS.map(a=>`<button data-v="${a}" aria-pressed="${ST.profile.avatar===a}">${a}</button>`).join("")}</div></div></div>
   <div class="card"><div class="field"><label>Mål per dag</label><div class="seg" id="obGoal">${[30,60,90].map(m=>`<button data-m="${m}" aria-pressed="${ST.goalMin===m}">${m} min</button>`).join("")}</div><small class="muted">Du øver helst lørdag og søndag. Målet gjelder hver av dagene.</small></div><div id="obApp"></div></div>
   <div class="card" style="padding:4px 18px"><div id="obSnd"></div></div>
-  <div id="obSync">${syncCardHTML()}</div>
   <div style="display:grid;gap:10px"><button class="btn" id="obGo">Lagre og ta kartleggingstest</button><button class="btn ghost" id="obSkip">Lagre og start fra kapittel 1</button></div></div>`}
 function bindOnboard(){
   const save1=()=>{ST.profile.name=($("#obName").value.trim()||"William").slice(0,24);ST.profile.onboarded=true;save()};
