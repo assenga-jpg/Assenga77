@@ -211,7 +211,7 @@ function ytEnsure(vid) {
 // ---- SoundCloud (offisiell innebygd spiller) ----
 // Én skjult spiller per spilleliste, forhåndslastet i bakgrunnen. Da starter «spill» og «neste» med én gang,
 // og trykket ditt rekker fram til spilleren (iPhone krever et ferskt trykk for å starte lyd).
-var scCur = 0, scDur = 0, scCmd = 0, scW = {}, scCurW = null, scWatch = null;
+var scCur = 0, scDur = 0, scCmd = 0, scW = {}, scCurW = null, scWatch = null, scEarly = null;
 function loadSCApi() {
   if (window.SC && SC.Widget) return Promise.resolve();
   return new Promise(function (res, rej) {
@@ -245,6 +245,19 @@ function scEntry(src, key, pl) {
     if (scCurW !== e || !S.cur || S.cur.type !== 'sc') return;
     scCur = d.currentPosition / 1000; if (!scDur) scDur = S.cur.dur || 0; tick();
     if (silent && silentLen && Math.abs(silent.currentTime - scCur) > 1.5 && scCur < silentLen) { try { silent.currentTime = scCur; } catch (x) {} }
+    // Bytt til neste låt ca. 1 sek FØR slutten, mens lyden fortsatt spiller. iPhone blokkerer ofte at en ny lydfil
+    // starter av seg selv når skjermen er låst, men lar spilleren gå videre mens den allerede spiller.
+    var rem = scDur - scCur;
+    if (e.pl && S.playing && scDur > 6 && rem > 0 && rem < 1.2 && scEarly !== S.cur.id && !S.shuffle && S.repeat !== 2) {
+      var n = S.queue[S.qi + 1];
+      if (n && n.type === 'sc' && n.pl === e.pl && n.pi === S.cur.pi + 1) {
+        scEarly = S.cur.id; scCmd = Date.now();
+        w.skip(n.pi);
+        S.qi++; S.cur = n; scCur = 0; scDur = n.dur || 0; silentFor(scDur || 240);
+        paintPlayer(true); markPlaying(); mediaMeta(n); posState(true);
+        setTimeout(scKeepAlive, 1200); setTimeout(scKeepAlive, 3000);
+      }
+    }
   });
   return e;
 }
