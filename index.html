@@ -1,4 +1,4 @@
-<!doctype html><html lang="nb"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light}body{margin:0;font-size:14px}img{max-width:100%}[hidden]{display:none!important}</style></head><body><title>Safari</title>
+<!doctype html><html lang="nb"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#1a9c5b"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Safari"><meta name="apple-mobile-web-app-status-bar-style" content="default"><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="apple-touch-icon.png"><link rel="icon" href="icon-192.png"><style>:root{color-scheme:light}body{margin:0;font-size:14px}img{max-width:100%}[hidden]{display:none!important}</style></head><body><title>Safari</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Sora:wght@500;600;700&display=swap" rel="stylesheet">
@@ -401,7 +401,40 @@ async function initStore(){
       if(snap.exists){ST=fillDefaults(mergeState(local,snap.data()))}
       syncMsg="Lagret i skyen";if(!snap.exists&&local)flush();lsSave()}}
   }catch(e){syncMsg="Lagres på denne enheten"}
-  if(!SS){applyTheme();render()}}
+  if(!SS){applyTheme();render()}
+  fbStart()}
+
+/* ===== Skysynk på vanlig nettside (Firebase + Google). Hoppes over inni claude.ai ===== */
+const FBCFG={"apiKey":"AIzaSyAG6-EubJpjcSndIZ-mmzu2rjgi-MTVh0c","authDomain":"swahili-app-ed605.firebaseapp.com","projectId":"swahili-app-ed605","storageBucket":"swahili-app-ed605.firebasestorage.app","messagingSenderId":"447437983870","appId":"1:447437983870:web:7178ed3feba178f23e882f"};
+let FBAUTH=null,FBUSER=null;
+function loadScript(u){return new Promise((res,rej)=>{const s=document.createElement("script");s.src=u;s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
+async function fbStart(){
+  if(!FBCFG||window.claude||FBAUTH)return;
+  try{
+    const B="https://www.gstatic.com/firebasejs/10.12.2/";
+    await loadScript(B+"firebase-app-compat.js");await loadScript(B+"firebase-auth-compat.js");await loadScript(B+"firebase-firestore-compat.js");
+    firebase.initializeApp(FBCFG);FBAUTH=firebase.auth();
+    FBAUTH.onAuthStateChanged(async u=>{FBUSER=u;
+      if(!u){DBDOC=null;syncMsg="Ikke innlogget. Lagres på denne enheten.";if(!SS)render();return}
+      try{DBDOC=firebase.firestore().doc("users/"+u.uid);
+        const snap=await DBDOC.get();const local=lsLoad();
+        if(snap.exists){ST=fillDefaults(mergeState(local,snap.data()));syncMsg="Synket i skyen"}
+        else{syncMsg="Synket i skyen";flush()}
+        lsSave();
+      }catch(e){DBDOC=null;syncMsg="Skysynk feilet. Lagres på denne enheten."}
+      if(!SS){applyTheme();render()}});
+  }catch(e){syncMsg="Skysynk ikke tilgjengelig. Lagres på denne enheten."}}
+function syncCardHTML(){
+  if(!FBCFG||window.claude)return "";
+  if(FBUSER)return `<div class="card" style="display:grid;gap:10px"><div><b>Synk er på</b><div class="muted" style="font-size:14px">Innlogget som ${esc(FBUSER.email||"Google-konto")}. Fremgangen lagres automatisk på alle enhetene dine.</div></div><button class="btn ghost" id="fbOut">Logg ut</button></div>`;
+  return `<div class="card" style="display:grid;gap:10px"><div><b>Synk mellom enheter</b><div class="muted" style="font-size:14px">Logg inn med Google én gang på hver enhet. Da følger fremgangen deg automatisk.</div></div><button class="btn" id="fbIn">Logg inn med Google</button><div id="fbMsg" class="muted" style="font-size:14px"></div></div>`}
+function bindSync(root){
+  const i=root.querySelector("#fbIn"),o=root.querySelector("#fbOut");
+  if(i)i.onclick=async()=>{const m=root.querySelector("#fbMsg");
+    if(!FBAUTH){m.textContent="Synk laster fortsatt. Prøv igjen om et øyeblikk.";return}
+    try{await FBAUTH.signInWithPopup(new firebase.auth.GoogleAuthProvider())}
+    catch(e){m.textContent=e&&e.code==="auth/popup-closed-by-user"?"Innloggingen ble avbrutt.":"Innlogging feilet ("+(e&&e.code||"ukjent feil")+")."}};
+  if(o)o.onclick=async()=>{await FBAUTH.signOut();render()}}
 
 /* ================= HJELPERE ================= */
 const $=s=>document.querySelector(s);
@@ -645,11 +678,13 @@ function renderOnboard(){
   <div class="field" style="margin-bottom:0"><label>Avatar</label><div class="avs" id="obAv">${AVATARS.map(a=>`<button data-v="${a}" aria-pressed="${ST.profile.avatar===a}">${a}</button>`).join("")}</div></div></div>
   <div class="card"><div class="field"><label>Mål per dag</label><div class="seg" id="obGoal">${[30,60,90].map(m=>`<button data-m="${m}" aria-pressed="${ST.goalMin===m}">${m} min</button>`).join("")}</div><small class="muted">Du øver helst lørdag og søndag. Målet gjelder hver av dagene.</small></div><div id="obApp"></div></div>
   <div class="card" style="padding:4px 18px"><div id="obSnd"></div></div>
+  <div id="obSync">${syncCardHTML()}</div>
   <div style="display:grid;gap:10px"><button class="btn" id="obGo">Lagre og ta kartleggingstest</button><button class="btn ghost" id="obSkip">Lagre og start fra kapittel 1</button></div></div>`}
 function bindOnboard(){
   const save1=()=>{ST.profile.name=($("#obName").value.trim()||"William").slice(0,24);ST.profile.onboarded=true;save()};
   $("#obAv").querySelectorAll("button").forEach(b=>b.onclick=()=>{ST.profile.avatar=b.dataset.v;$("#obAv").querySelectorAll("button").forEach(x=>x.setAttribute('aria-pressed',x===b))});
   $("#obGoal").querySelectorAll("button").forEach(b=>b.onclick=()=>{ST.goalMin=+b.dataset.m;$("#obGoal").querySelectorAll("button").forEach(x=>x.setAttribute('aria-pressed',x===b))});
+  bindSync($("#obSync"));
   const a=$("#obApp"),s=$("#obSnd");const da=()=>{a.innerHTML=appearanceHTML();bindAppearance(a,da)};da();
   const ds=()=>{s.innerHTML=soundHTML();bindSound(s,ds)};ds();
   $("#obGo").onclick=()=>{ac();save1();render();startPlacement()};
@@ -753,7 +788,11 @@ function renderMe(){
    <div class="field" style="margin-bottom:0"><label>Mål per dag</label><div class="seg" id="goalSeg">${[30,60,90].map(m=>`<button data-m="${m}" aria-pressed="${ST.goalMin===m}">${m} min</button>`).join("")}</div></div></div>
   <h2 class="sec">Utseende</h2><div class="card" id="meApp"></div>
   <h2 class="sec">Lyd og mikrofon</h2><div class="card" id="meSnd" style="padding:4px 18px"></div>
-  <h2 class="sec">Del og flytt</h2><div class="card"><p style="margin:0">Søsteren din kan åpne samme lenke og får sin egen fremgang. Da må siden deles med henne som «Contributor» i Share-menyen på claude.ai. Mikrofonen fungerer ikke inne i claude.ai, så for snakketrening må appen ligge på en vanlig nettside.</p></div>
+  <h2 class="sec">Synk</h2><div id="syncBox">${syncCardHTML()}</div>
+  <h2 class="sec">Reserve: flytt med kode</h2><div class="card" style="display:grid;gap:10px"><p class="muted" style="margin:0">Bruk dette bare hvis synk ikke virker. Trykk «Kopier kode», send koden til deg selv, og lim den inn på den andre enheten.</p>
+   <button class="btn ghost" id="expCode">Kopier kode</button>
+   <textarea id="impTxt" class="ta" rows="2" placeholder="Lim inn kode her" style="min-height:56px;font-size:16px"></textarea>
+   <button class="btn ghost" id="impCode">Lim inn kode</button><div id="impMsg" class="muted" style="font-size:14px"></div></div>
   <h2 class="sec">Kartlegging og nullstilling</h2><div class="card" style="display:grid;gap:10px"><button class="btn ghost" id="rePlace">Ta kartleggingen igjen</button><button class="btn ghost" id="reset">Nullstill fremgang</button></div>
   <p class="sync">${esc(syncMsg)}</p>`}
 function bindMe(){
@@ -762,6 +801,18 @@ function bindMe(){
   $("#goalSeg").querySelectorAll("button").forEach(b=>b.onclick=()=>{ST.goalMin=+b.dataset.m;save();render()});
   const a=$("#meApp"),s=$("#meSnd");const da=()=>{a.innerHTML=appearanceHTML();bindAppearance(a,()=>{da();const e=$("#tbTheme");if(e)e.innerHTML=isDark()?I.sun:I.moon})};da();
   const ds=()=>{s.innerHTML=soundHTML();bindSound(s,ds)};ds();
+  bindSync($("#syncBox"));
+  $("#expCode").onclick=async()=>{const m=$("#impMsg");
+    try{const code="SAFARI1:"+btoa(unescape(encodeURIComponent(JSON.stringify(ST))));
+      try{await navigator.clipboard.writeText(code);m.textContent="Koden er kopiert. Lim den inn på den andre enheten."}
+      catch(e){$("#impTxt").value=code;$("#impTxt").select();m.textContent="Kopier koden i boksen over (marker alt og kopier)."}}
+    catch(e){m.textContent="Klarte ikke lage kode."}};
+  $("#impCode").onclick=()=>{const m=$("#impMsg");const t=$("#impTxt").value.trim();
+    if(!t.startsWith("SAFARI1:")){m.textContent="Det ser ikke ut som en Safari-kode. Den skal starte med SAFARI1:";return}
+    try{const o=JSON.parse(decodeURIComponent(escape(atob(t.slice(8)))));if(!o||typeof o!=="object"||!o.profile||!o.words)throw 0;
+      const sh=sheet(`<h2 style="margin-bottom:8px">Bytte ut fremgangen?</h2><p class="muted">Fremgangen på denne enheten byttes ut med koden din (${o.xp||0} XP). Dette kan ikke angres.</p><div style="display:grid;gap:10px;margin-top:14px"><button class="btn" id="yesImp">Ja, bytt</button><button class="btn ghost" data-close>Avbryt</button></div>`);
+      sh.querySelector("#yesImp").onclick=()=>{ST=fillDefaults(o);save();sh.close();applyTheme();render()}}
+    catch(e){m.textContent="Koden er ødelagt eller ufullstendig. Kopier den på nytt."}};
   $("#rePlace").onclick=()=>{ac();startPlacement()};
   $("#reset").onclick=()=>{const sh=sheet(`<h2 style="margin-bottom:8px">Nullstille fremgang?</h2><p class="muted">Alle leksjoner, ord, XP og historikk slettes. Profil og innstillinger beholdes. Dette kan ikke angres.</p><div style="display:grid;gap:10px;margin-top:14px"><button class="btn bad" id="yesReset">Ja, nullstill</button><button class="btn ghost" data-close>Avbryt</button></div>`);
     sh.querySelector("#yesReset").onclick=()=>{const p=ST.profile,se=ST.settings,g=ST.goalMin;ST=clone(DEF);ST.profile=p;ST.settings=se;ST.goalMin=g;save();sh.close();render()}}}
@@ -989,4 +1040,4 @@ function placeEnd(){
 /* ================= OPPSTART ================= */
 applyTheme();render();initStore();
 </script>
-</body></html>
+<script>if("serviceWorker"in navigator&&location.protocol==="https:")addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}))</script></body></html>

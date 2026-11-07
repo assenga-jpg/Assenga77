@@ -1,0 +1,16 @@
+{
+  "name": "Safari – lær swahili",
+  "short_name": "Safari",
+  "description": "Lær swahili uten hjerter og ventetid.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4faf6",
+  "theme_color": "#1a9c5b",
+  "lang": "nb",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
