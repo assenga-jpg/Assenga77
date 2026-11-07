@@ -59,6 +59,9 @@ h1{font-size:30px;font-weight:700;letter-spacing:-.02em}
 #bigcov img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 #ytwrap{display:none;width:100%;aspect-ratio:16/9;border-radius:12px;overflow:hidden;background:#000}
 #ytwrap iframe{width:100%;height:100%;border:0}
+#scwrap{display:none;width:100%;border-radius:12px;overflow:hidden}
+#scwrap iframe{width:100%;height:166px;border:0;display:block}
+#imp{position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;border:0}
 #ft{font-size:21px;font-weight:700;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #fa{color:var(--mu);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .seek{margin:16px 0 4px}
@@ -97,7 +100,7 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border:0;border-radiu
 
 <div id="full">
   <div class="fh"><button class="ib" id="close" aria-label="Lukk"></button><span>Spilles nå</span><button class="ib" id="fmore" aria-label="Mer"></button></div>
-  <div class="stage"><div id="bigcov"></div><div id="ytwrap"><div id="ytp"></div></div></div>
+  <div class="stage"><div id="bigcov"></div><div id="ytwrap"><div id="ytp"></div></div><div id="scwrap"><iframe id="scf" title="SoundCloud" allow="autoplay"></iframe></div></div>
   <div id="ft"></div><div id="fa"></div>
   <div class="seek"><input type="range" id="seek" min="0" max="1000" value="0"><div class="times"><span id="tc">0:00</span><span id="td">0:00</span></div></div>
   <div class="ctl">
@@ -202,16 +205,49 @@ function ytEnsure(vid) {
     });
   });
 }
+// ---- SoundCloud (offisiell innebygd spiller) ----
+var sc = null, scReady = false, scCur = 0, scDur = 0, scWant = null;
+function loadSCApi() {
+  if (window.SC && SC.Widget) return Promise.resolve();
+  return new Promise(function (res, rej) {
+    var s = document.createElement('script'); s.src = 'https://w.soundcloud.com/player/api.js'; s.onload = res; s.onerror = rej; document.head.appendChild(s);
+  });
+}
+function scSrc(url) { return 'https://w.soundcloud.com/player/?url=' + encodeURIComponent(url) + '&auto_play=true&hide_related=true&show_comments=false&show_user=true&show_reposts=false&visual=false'; }
+function scStart(t) {
+  return loadSCApi().then(function () {
+    var T = SC.Widget.Events;
+    if (sc) { scWant = t.id; sc.load(t.url, { auto_play: true, show_comments: false, hide_related: true, visual: false }); return; }
+    scWant = t.id;
+    var f = $('#scf'); f.src = scSrc(t.url);
+    sc = SC.Widget(f);
+    sc.bind(T.READY, function () { scReady = true; });
+    sc.bind(T.PLAY, function () { if (S.cur && S.cur.type === 'sc') setPlaying(true); });
+    sc.bind(T.PAUSE, function () { if (S.cur && S.cur.type === 'sc') setPlaying(false); });
+    sc.bind(T.FINISH, function () { if (S.cur && S.cur.type === 'sc') next(true); });
+    sc.bind(T.PLAY_PROGRESS, function (d) {
+      if (!S.cur || S.cur.type !== 'sc') return;
+      scCur = d.currentPosition / 1000; if (!scDur) scDur = (S.cur.dur || 0); tick();
+    });
+    sc.bind(T.READY, function () { sc.getDuration(function (ms) { scDur = ms / 1000; }); });
+  });
+}
 function stopAll() {
   audio.pause(); clearInterval(ytTimer);
   if (yt && ytReady) { try { yt.pauseVideo(); } catch (e) {} }
+  if (sc) { try { sc.pause(); } catch (e) {} }
 }
 function setPlaying(p) { S.playing = p; paintPlayer(); if ('mediaSession' in navigator) navigator.mediaSession.playbackState = p ? 'playing' : 'paused'; }
 
 function playTrack(t) {
-  stopAll(); S.cur = t; ytCur = ytDur = 0;
+  stopAll(); S.cur = t; ytCur = ytDur = 0; scCur = 0; scDur = t.dur || 0;
+  $('#scwrap').style.display = t.type === 'sc' ? 'block' : 'none';
   paintPlayer(true); markPlaying();
-  if (t.type === 'yt') {
+  if (t.type === 'sc') {
+    $('#ytwrap').style.display = 'none'; $('#bigcov').style.display = 'none';
+    scStart(t).catch(function () { toast('Fikk ikke kontakt med SoundCloud'); setPlaying(false); });
+    setPlaying(true);
+  } else if (t.type === 'yt') {
     $('#ytwrap').style.display = 'block'; $('#bigcov').style.display = 'none';
     loadYTApi().then(function () { return ytEnsure(t.vid); }).then(function () {
       clearInterval(ytTimer);
@@ -244,19 +280,23 @@ audio.addEventListener('timeupdate', tick);
 audio.addEventListener('durationchange', tick);
 audio.addEventListener('error', function () { if (audio.src && S.cur && S.cur.type !== 'yt') { toast('Kunne ikke spille «' + S.cur.title + '»'); setPlaying(false); } });
 
-function curTime() { return S.cur && S.cur.type === 'yt' ? ytCur : audio.currentTime; }
-function curDur() { return S.cur && S.cur.type === 'yt' ? ytDur : (isFinite(audio.duration) ? audio.duration : (S.cur && S.cur.dur) || 0); }
+function curTime() { return S.cur && S.cur.type === 'yt' ? ytCur : S.cur && S.cur.type === 'sc' ? scCur : audio.currentTime; }
+function curDur() { return S.cur && S.cur.type === 'yt' ? ytDur : S.cur && S.cur.type === 'sc' ? scDur : (isFinite(audio.duration) ? audio.duration : (S.cur && S.cur.dur) || 0); }
 function tick() {
   var c = curTime(), d = curDur();
   $('#tc').textContent = fmt(c); $('#td').textContent = fmt(d);
   if (!dragging) { var v = d ? Math.round(c / d * 1000) : 0; $('#seek').value = v; $('#seek').style.setProperty('--p', (v / 10) + '%'); }
-  if ('mediaSession' in navigator && navigator.mediaSession.setPositionState && d && S.cur && S.cur.type !== 'yt') {
+  if ('mediaSession' in navigator && navigator.mediaSession.setPositionState && d && S.cur && S.cur.type !== 'yt' && S.cur.type !== 'sc') {
     try { navigator.mediaSession.setPositionState({ duration: d, position: Math.min(c, d), playbackRate: 1 }); } catch (e) {}
   }
 }
-function seekTo(sec) { if (S.cur && S.cur.type === 'yt') { if (yt && ytReady) yt.seekTo(sec, true); } else audio.currentTime = sec; }
+function seekTo(sec) {
+  if (S.cur && S.cur.type === 'sc') { if (sc) { sc.seekTo(sec * 1000); scCur = sec; } }
+  else if (S.cur && S.cur.type === 'yt') { if (yt && ytReady) yt.seekTo(sec, true); } else audio.currentTime = sec;
+}
 function toggle() {
   if (!S.cur) { if (S.visible.length) playQueue(S.visible, 0); return; }
+  if (S.cur.type === 'sc') { if (sc) sc.toggle(); return; }
   if (S.cur.type === 'yt') { if (yt && ytReady) { S.playing ? yt.pauseVideo() : yt.playVideo(); } }
   else { if (audio.paused) { var p = audio.play(); if (p && p.catch) p.catch(function () {}); } else audio.pause(); }
 }
@@ -302,7 +342,7 @@ function paintPlayer(full) {
   if (full !== undefined) {
     $('#ft').textContent = t.title; $('#fa').textContent = t.artist || '';
     var bc = $('#bigcov'); bc.style.cssText = covStyle(t); bc.innerHTML = coverHtml(t);
-    if (t.type === 'yt') { bc.style.display = 'none'; }
+    if (t.type === 'yt' || t.type === 'sc') { bc.style.display = 'none'; }
   }
   $('#bshuf').className = S.shuffle ? 'on' : '';
   $('#brep').className = S.repeat ? 'on' : '';
@@ -318,7 +358,7 @@ function markPlaying() {
 
 // ---------- visninger ----------
 function row(t, i) {
-  var sub = t.type === 'file' ? 'Egen fil' : t.type === 'yt' ? 'YouTube' : 'Audius';
+  var sub = t.type === 'file' ? 'Egen fil' : t.type === 'yt' ? 'YouTube' : t.type === 'sc' ? 'SoundCloud' : 'Audius';
   return '<div class="row" data-i="' + i + '"><div class="cov" style="' + covStyle(t) + '">' + coverHtml(t) + '</div><div class="meta"><div class="t">' + esc(t.title) + '</div><div class="s">' + esc(t.artist ? t.artist + ' · ' : '') + sub + '</div></div><button class="ib" data-more="' + i + '" aria-label="Mer">' + I.more + '</button></div>';
 }
 function render() {
@@ -407,8 +447,61 @@ function ask(title, ph, btn, cb) {
     setTimeout(function () { i.focus(); }, 250);
   });
 }
+function scImport(url) {
+  return loadSCApi().then(function () {
+    return new Promise(function (res, rej) {
+      var f = document.createElement('iframe'); f.id = 'imp'; f.setAttribute('allow', 'autoplay');
+      f.src = 'https://w.soundcloud.com/player/?auto_play=false&url=' + encodeURIComponent(url);
+      document.body.appendChild(f);
+      var w = SC.Widget(f), done = false;
+      function fin(v, err) { if (done) return; done = true; clearTimeout(to); try { f.remove(); } catch (e) {} err ? rej(err) : res(v); }
+      var to = setTimeout(function () { fin(null, new Error('timeout')); }, 40000);
+      w.bind(SC.Widget.Events.READY, function () {
+        // SoundCloud fyller ut låtene litt etter litt, så vi venter til alle har tittel og lenke
+        var tries = 0;
+        (function poll() {
+          w.getSounds(function (arr) {
+            arr = arr || [];
+            var ok = arr.filter(function (s) { return s && s.permalink_url; }).length;
+            if (arr.length && ok === arr.length) return fin(arr);
+            if (!arr.length && tries > 2) return w.getCurrentSound(function (s) { fin(s ? [s] : []); });
+            if (++tries > 14) return fin(arr.filter(function (s) { return s && s.permalink_url; }));
+            setTimeout(poll, 1500);
+          });
+        })();
+      });
+    });
+  });
+}
+function scToTrack(s, i) {
+  return { id: 's_' + s.id, type: 'sc', url: s.permalink_url, title: s.title || 'SoundCloud', artist: (s.user && s.user.username) || '', art: (s.artwork_url || '').replace('-large', '-t300x300'), dur: (s.duration || 0) / 1000, added: Date.now() + i };
+}
+function scPrompt() {
+  ask('SoundCloud-lenke', 'Lenke til låt eller spilleliste', 'Legg til', function (url) {
+    if (!/soundcloud\.com\//i.test(url)) { toast('Det ser ikke ut som en SoundCloud-lenke'); return; }
+    url = url.trim().split('?')[0];
+    toast('Henter fra SoundCloud …');
+    scImport(url).then(function (arr) {
+      arr = arr.filter(function (s) { return s && s.permalink_url; });
+      if (!arr.length) { toast('Fant ingen låter. Er lenken privat?'); return; }
+      var tracks = arr.map(scToTrack), chain = Promise.resolve();
+      tracks.forEach(function (t) { chain = chain.then(function () { return dbPut(t).then(function () { S.tracks = S.tracks.filter(function (x) { return x.id !== t.id; }); S.tracks.push(t); }); }); });
+      return chain.then(function () {
+        if (S.tab === 'lib') render();
+        toast(tracks.length + (tracks.length === 1 ? ' låt lagt til' : ' låter lagt til'));
+        if (tracks.length > 1) setTimeout(function () { offerList(tracks); }, 2300);
+      });
+    }).catch(function () { toast('Klarte ikke å hente lenken. Prøv igjen.'); });
+  });
+}
+function offerList(tracks) {
+  openSheet('Lag spilleliste av dem?', [{ label: 'Ja, lag spilleliste', sub: tracks.length + ' låter', fn: function () {
+    ask('Navn på spillelisten', 'For eksempel «Godly»', 'Lag liste', function (n) { S.lists.push({ id: uid(), name: n, ids: tracks.map(function (t) { return t.id; }) }); saveLists(); toast('Spilleliste laget'); if (S.tab === 'lists') render(); });
+  } }, { label: 'Nei takk', fn: function () {} }]);
+}
 function addMenu() {
   openSheet('Legg til musikk', [
+    { label: 'Lim inn SoundCloud-lenke', sub: 'Låt eller hel spilleliste. Spilles med SoundClouds egen spiller', fn: scPrompt },
     { label: 'Velg lydfiler fra telefonen', sub: 'MP3, M4A, FLAC, WAV. Bare musikk du eier eller har lov til å ha.', fn: function () { $('#files').click(); } },
     { label: 'Lim inn YouTube-lenke', sub: 'Spilles med YouTubes egen spiller (med reklame, og uten bakgrunnsavspilling på iPhone)', fn: ytPrompt }
   ]);
