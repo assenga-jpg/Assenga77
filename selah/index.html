@@ -61,7 +61,7 @@ h1{font-size:30px;font-weight:700;letter-spacing:-.02em}
 #ytwrap iframe{width:100%;height:100%;border:0}
 #scwrap{display:none;width:100%;border-radius:12px;overflow:hidden}
 #scwrap iframe{width:100%;height:166px;border:0;display:block}
-#imp{position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;border:0}
+#imp{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(320px,90vw);height:166px;z-index:80;border:1px solid var(--line);border-radius:12px;background:var(--s1);box-shadow:0 10px 40px #000a}
 #ft{font-size:21px;font-weight:700;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #fa{color:var(--mu);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .seek{margin:16px 0 4px}
@@ -455,7 +455,7 @@ function scImport(url) {
       document.body.appendChild(f);
       var w = SC.Widget(f), done = false;
       function fin(v, err) { if (done) return; done = true; clearTimeout(to); try { f.remove(); } catch (e) {} err ? rej(err) : res(v); }
-      var to = setTimeout(function () { fin(null, new Error('timeout')); }, 40000);
+      var to = setTimeout(function () { fin(null, new Error('timeout')); }, 90000);
       var rt = setTimeout(function () { fin(null, new Error('ikke funnet')); }, 15000);
       w.bind(SC.Widget.Events.READY, function () {
         clearTimeout(rt);
@@ -467,7 +467,7 @@ function scImport(url) {
             var ok = arr.filter(function (s) { return s && s.permalink_url; }).length;
             if (arr.length && ok === arr.length) return fin(arr);
             if (!arr.length && tries > 2) return w.getCurrentSound(function (s) { fin(s ? [s] : []); });
-            if (++tries > 14) return fin(arr.filter(function (s) { return s && s.permalink_url; }));
+            if (++tries > 40) return fin(arr.filter(function (s) { return s && s.permalink_url; }));
             setTimeout(poll, 1500);
           });
         })();
