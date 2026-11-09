@@ -179,6 +179,29 @@ nav.tabs button.on svg{stroke:var(--gold)}
 .selbar button{flex:1;padding:11px;border-radius:12px;color:#fff;font-size:14px;font-weight:500;background:rgba(255,255,255,.14)}
 .selbar button.g{background:var(--gold)}
 
+/* ---------- GUIDES ---------- */
+.glist{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+.gcard{position:relative;display:flex;align-items:center;gap:14px;padding:12px;border-radius:20px;text-align:left;background:rgba(255,253,248,.9);border:1px solid var(--line);transition:transform .2s var(--ease),border-color .2s}
+.gcard:active{transform:scale(.98);border-color:var(--gold)}
+.gcard .gp{width:62px;height:62px;border-radius:14px;flex:none}
+.gcard b{display:block;font-family:var(--serif);font-size:21px;font-weight:600;line-height:1.1}
+.gcard small{display:block;margin-top:4px;font-size:12px;color:var(--ink-soft)}
+.gcard .bar{height:4px;border-radius:4px;background:var(--line);margin-top:7px;overflow:hidden}
+.gcard .bar i{display:block;height:100%;background:var(--gold)}
+.gcard>span{margin-left:auto;font-size:22px;color:var(--ink-soft)}
+.gv h1{font-family:var(--serif);font-weight:600;font-size:36px;line-height:1.05;margin-bottom:6px}
+.les{display:flex;align-items:center;gap:14px;width:100%;padding:16px;border-radius:18px;margin-top:10px;text-align:left;background:rgba(255,253,248,.9);border:1px solid var(--line)}
+.les .n{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;flex:none;font-weight:600;font-size:14px;border:1px solid var(--gold-soft);color:var(--ink-soft)}
+.les.done .n{background:var(--gold);color:#fff;border-color:var(--gold)}
+.les b{font-family:var(--serif);font-size:20px;font-weight:600;line-height:1.1}
+.lbody{margin-top:12px;font-family:var(--serif);font-size:20px;line-height:1.6;padding:16px 18px;border-radius:22px;background:rgba(255,253,248,.88);border:1px solid var(--line)}
+.lbody p+p{margin-top:12px}
+.acts{display:flex;flex-direction:column;gap:10px;margin-top:16px}
+.acts button{padding:15px;border-radius:16px;font-size:15px;font-weight:500;border:1px solid var(--line);background:rgba(255,253,248,.92)}
+.acts button.gold{background:var(--gold);color:#fff;border-color:var(--gold)}
+.acts button.done{background:rgba(231,211,161,.5);color:var(--ink)}
+.kick{font-size:11px;letter-spacing:.24em;text-transform:uppercase;color:var(--gold);font-weight:600}
+
 /* ---------- CHAT ---------- */
 #view-chat{padding:0;overflow:hidden}
 #view-chat.active{display:flex;flex-direction:column}
@@ -277,6 +300,11 @@ body.chatting nav.tabs{display:none}
           <h2 id="chatTitle"></h2>
           <div class="chatrow" id="cats"></div>
         </section>
+
+        <section>
+          <h2 id="gdTitle"></h2>
+          <div class="glist" id="glist"></div>
+        </section>
       </div>
     </section>
 
@@ -289,6 +317,9 @@ body.chatting nav.tabs{display:none}
     <section class="view" id="view-read">
       <div class="reveal"><div id="readRoot"></div></div>
     </section>
+    <!-- Guides -->
+    <section class="view" id="view-guide"><div id="guideRoot"></div></section>
+
     <!-- Chat -->
     <section class="view" id="view-chat">
       <header class="chead"><button class="cb" id="chatBack" aria-label="Tilbake">‹</button><div class="ct"><b id="chTitle"></b><small id="chSub"></small></div><button class="cb sm" id="chNew"></button></header>
@@ -307,6 +338,7 @@ body.chatting nav.tabs{display:none}
   </main>
 </div>
 
+<script src="guides.js"></script>
 <script>
 /* ---------- Tekster (norsk/engelsk) ---------- */
 const T={
@@ -537,6 +569,55 @@ $('#chIn').addEventListener('input',e=>{e.target.style.height='auto';e.target.st
 $('#chatBack').addEventListener('click',closeChat);
 $('#chNew').addEventListener('click',()=>{chat.msgs=[];saveChat();drawChat()});
 
+/* ---------- GUIDES ---------- */
+const GT={
+ no:{title:"Guider",les:"leksjoner",lesson:"Leksjon",home:"‹ Hjem",ask:"Spør Catholic Faith om dette",mark:"Marker som fullført",done:"✓ Fullført",next:"Neste leksjon ›",askp:"Forklar mer om dette temaet, enkelt: ",guide:"Guide"},
+ en:{title:"Guides",les:"lessons",lesson:"Lesson",home:"‹ Home",ask:"Ask Catholic Faith about this",mark:"Mark as completed",done:"✓ Completed",next:"Next lesson ›",askp:"Explain more about this topic, simply: ",guide:"Guide"}
+};
+const gprog=()=>{try{return JSON.parse(store.get('cf_guides','{}'))||{}}catch(e){return {}}};
+const gdone=(g,l)=>(gprog()[g]||[]).includes(l);
+let gs={g:0,l:-1};
+function markToday(){
+  if(store.get('cf_done','')===todayKey)return;
+  const y=new Date(today-864e5).toISOString().slice(0,10);
+  const s=store.get('cf_done','')===y?+store.get('cf_streak','0')+1:1;
+  store.set('cf_streak',String(s)); store.set('cf_done',todayKey);
+}
+function showGuideView(){$$('.view').forEach(v=>v.classList.remove('active'));document.body.classList.remove('chatting');const v=$('#view-guide');v.classList.add('active');v.scrollTop=0}
+function openGuide(g){gs={g,l:-1};showGuideView();renderGuide()}
+function openLesson(g,l){gs={g,l};showGuideView();renderGuide()}
+function closeGuide(){render();$$('.view').forEach(v=>v.classList.remove('active'));$('#view-home').classList.add('active');$$('nav.tabs button').forEach(x=>x.classList.toggle('on',x.dataset.tab==='home'))}
+async function renderGuide(){
+  const root=$('#guideRoot'), t=GT[lang], G=GUIDES[gs.g]; root.innerHTML=''; const w=mk('div','gv rd'); root.appendChild(w);
+  const gname=G[lang];
+  if(gs.l<0){
+    const b=mk('button','back',t.home); b.onclick=closeGuide; w.appendChild(b);
+    w.appendChild(mk('div','kick',t.guide+' '+(gs.g+1))); w.appendChild(mk('h1','',gname)); w.appendChild(mk('div','lead',G.L.length+' '+t.les));
+    G.L.forEach((L,i)=>{const d=gdone(gs.g,i); const e=mk('button','les'+(d?' done':'')); e.appendChild(mk('div','n',d?'✓':String(i+1))); e.appendChild(mk('b','',L[lang][0])); e.onclick=()=>openLesson(gs.g,i); w.appendChild(e)});
+  } else {
+    const L=G.L[gs.l], c=L[lang];
+    const b=mk('button','back','‹ '+gname); b.onclick=()=>openGuide(gs.g); w.appendChild(b);
+    w.appendChild(mk('div','kick',t.lesson+' '+(gs.l+1)+' / '+G.L.length)); w.appendChild(mk('h1','',c[0]));
+    const body=mk('div','lbody'); c.slice(1).forEach(p=>body.appendChild(mk('p','',p))); w.appendChild(body);
+    for(const r of L.v){w.appendChild(await verseCard(r))}
+    const acts=mk('div','acts'); w.appendChild(acts);
+    const ask=mk('button','',t.ask); ask.onclick=()=>openChat(t.askp+gname+' – '+c[0]); acts.appendChild(ask);
+    const d=gdone(gs.g,gs.l); const m=mk('button',d?'done':'gold',d?t.done:t.mark);
+    m.onclick=()=>{ if(gdone(gs.g,gs.l))return; const p=gprog(); (p[gs.g]=p[gs.g]||[]).push(gs.l); store.set('cf_guides',JSON.stringify(p)); markToday(); renderGuide() };
+    acts.appendChild(m);
+    if(gs.l<G.L.length-1){const n=mk('button','',t.next); n.onclick=()=>openLesson(gs.g,gs.l+1); acts.appendChild(n)}
+  }
+}
+function renderGuideList(){
+  const t=GT[lang]; $('#gdTitle').textContent=t.title; const box=$('#glist'); box.innerHTML='';
+  GUIDES.forEach((G,i)=>{
+    const dn=(gprog()[i]||[]).length, tot=G.L.length;
+    const c=mk('button','gcard'); const p=mk('div','gp paint'); p.style.backgroundSize=G.crop[0]; p.style.backgroundPosition=G.crop[1]; c.appendChild(p);
+    const m=mk('div'); m.appendChild(mk('b','',G[lang])); m.appendChild(mk('small','',dn+' / '+tot+' '+t.les)); const bar=mk('div','bar'); const bi=mk('i'); bi.style.width=(dn/tot*100)+'%'; bar.appendChild(bi); m.appendChild(bar); c.appendChild(m);
+    c.appendChild(mk('span','','›')); c.onclick=()=>openGuide(i); box.appendChild(c);
+  });
+}
+
 /* Tekster og innhold */
 function render(){
   const t=T[lang]; document.documentElement.lang=lang;
@@ -548,7 +629,7 @@ function render(){
   $('#tjTitle').textContent=t.journey; $('#tjSub').textContent=t.day+' '+(lesson+1)+' · '+t.lessons[lesson];
   $('#chatTitle').textContent=t.chat;
   $('#tHome').textContent=t.home;$('#tListen').textContent=t.listen;$('#tRead').textContent=t.read;
-  $('#lTitle').textContent=t.lT;$('#lText').textContent=t.lX;renderRead();chatChrome();if($('#view-chat').classList.contains('active'))drawChat();
+  $('#lTitle').textContent=t.lT;$('#lText').textContent=t.lX;renderRead();renderGuideList();if($('#view-guide').classList.contains('active'))renderGuide();chatChrome();if($('#view-chat').classList.contains('active'))drawChat();
   $$('.lang button').forEach(b=>b.classList.toggle('on',b.dataset.lang===lang));
   // uke
   const dow=today.getDay(), done=store.get('cf_done','');
@@ -564,9 +645,8 @@ function toast(msg){const el=$('#toast');el.textContent=msg;el.classList.add('sh
 $$('.lang button').forEach(b=>b.addEventListener('click',()=>{lang=b.dataset.lang;store.set('cf_lang',lang);render()}));
 $('#btnBegin').addEventListener('click',()=>{
   if(store.get('cf_done','')===todayKey)return;
-  const y=new Date(today-864e5).toISOString().slice(0,10);
-  const s=store.get('cf_done','')===y?+store.get('cf_streak','0')+1:1;
-  store.set('cf_streak',String(s)); store.set('cf_done',todayKey); render();
+  const g=dayOfYear%GUIDES.length; let l=GUIDES[g].L.findIndex((_,i)=>!gdone(g,i)); if(l<0)l=0;
+  openLesson(g,l);
 });
 $('#btnInterpret').addEventListener('click',()=>{const v=VERSES[dayOfYear%VERSES.length];openChat(CH[lang].interp+' '+v[1]+' — “'+v[0]+'”','study')});
 $('#cats').addEventListener('click',e=>{const c=e.target.closest('.cat'); if(c)openChat(CH[lang].starts[+c.dataset.i]||'')});
