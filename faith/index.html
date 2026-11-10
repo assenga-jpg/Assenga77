@@ -403,11 +403,13 @@ const R={
  no:{title:"Les",lead:"Bibelen med alle 73 bøker",ot:"Det gamle",nt:"Det nye",search:"Søk etter bok …",resume:"Fortsett å lese",
      chapter:"Kapittel",chapters:"kapitler",back:"‹ Alle bøker",prev:"‹ Forrige",next:"Neste ›",copy:"Kopier",share:"Del",copied:"Vers kopiert",
      none:"Ingen bøker funnet",fail:"Kunne ikke laste teksten. Sjekk nettet og prøv igjen.",loading:"Laster …",deu:"Deuterokanonisk bok",
-     src:"Tekst: Douay-Rheims (Challoner), fri tekst på engelsk. Den norske teksten kommer senere. Les også Legacy Standard Bible (LSB):",psalm:"Merk: Salmene er nummerert etter Vulgata, så tallene kan avvike litt fra protestantiske bibler."},
+     src:"Les også Legacy Standard Bible (LSB):",psalm:"Merk: Salmene er nummerert etter Vulgata (Douay), så tallene kan avvike litt fra protestantiske bibler.",psalmWeb:"Merk: i denne oversettelsen er Salmene nummerert etter hebraisk tekst, så tallene avviker litt fra Vulgata.",
+     trl:"Oversettelse",nbnote:"Gratis norsk tekst finnes bare for Det nye testamente. Det gamle testamente vises på engelsk.",fallback:"Engelsk tekst: norsk finnes bare for Det nye testamente.",tapv:"Trykk på et vers for å kopiere eller dele"},
  en:{title:"Read",lead:"The Bible with all 73 books",ot:"Old",nt:"New",search:"Search for a book …",resume:"Continue reading",
      chapter:"Chapter",chapters:"chapters",back:"‹ All books",prev:"‹ Previous",next:"Next ›",copy:"Copy",share:"Share",copied:"Verse copied",
      none:"No books found",fail:"Could not load the text. Check your connection and try again.",loading:"Loading …",deu:"Deuterocanonical book",
-     src:"Text: Douay-Rheims (Challoner), public-domain English. Read the Legacy Standard Bible (LSB) too:",psalm:"Note: the Psalms follow Vulgate numbering, so numbers can differ slightly from Protestant Bibles."}
+     src:"Read the Legacy Standard Bible (LSB) too:",psalm:"Note: the Psalms follow Vulgate (Douay) numbering, so numbers can differ slightly from Protestant Bibles.",psalmWeb:"Note: in this translation the Psalms follow the Hebrew numbering, so numbers differ slightly from the Vulgate.",
+     trl:"Translation",nbnote:"Free Norwegian text exists only for the New Testament.",fallback:"English text: Norwegian is only available for the New Testament.",tapv:"Tap a verse to copy or share"}
 };
 const DEU_BOOKS=new Set([17,18,25,26,30,45,46]); // Tobit, Judit, Visdom, Sirak, Baruk, 1-2 Makkabeer
 let BIDX=null, BCACHE={}, rs={mode:'books',nt:0,q:'',book:0,ch:0}, sel=new Set();
@@ -423,30 +425,50 @@ async function loadDayVerse(){
     const list=typeof DAILY_VERSES!=='undefined'?DAILY_VERSES:[]; if(!list.length||!BIDX)return;
     const n=Math.floor((Date.UTC(today.getFullYear(),today.getMonth(),today.getDate())-Date.UTC(2026,0,1))/864e5);
     const ref=list[((n%list.length)+list.length)%list.length];
-    const m=ref.match(/^(\S+) (\d+):(\d+)(?:-(\d+))?$/); const id=findBook(m[1]); const d=await loadBook(id);
-    const v1=+m[3],v2=+(m[4]||m[3]); const vs=d[+m[2]-1].slice(v1-1,v2); if(!vs.length)return;
+    const m=ref.match(/^(\S+) (\d+):(\d+)(?:-(\d+))?$/); const id=findBook(m[1]);
+    const v1=+m[3],v2=+(m[4]||m[3]); const {vs}=await passage(id,+m[2],v1,v2); if(!vs.length)return;
     DV_CUR={text:vs.join(' '),ref:bname(bookById(id))+' '+m[2]+':'+v1+(v2>v1?'–'+v2:'')};
     const t=$('#vText'),r=$('#vRef'); if(t){t.textContent=DV_CUR.text;r.textContent=DV_CUR.ref}
   }catch(e){}
 }
-fetch('bible/index.json').then(r=>r.json()).then(j=>{BIDX=j;renderRead();loadDayVerse()}).catch(()=>{});
-async function loadBook(id){
-  if(BCACHE[id])return BCACHE[id];
-  const r=await fetch('bible/'+id+'.json'); if(!r.ok)throw new Error('x');
-  return BCACHE[id]=await r.json();
+fetch('bible/index.json').then(r=>r.json()).then(j=>{BIDX=j;renderRead();loadDayVerse();if(typeof renderListen==='function')renderListen()}).catch(()=>{});
+const TRS={drc:{dir:'bible'},web:{dir:'bible-web'},nb:{dir:'bible-nb'}};
+const TRN={no:{drc:"Douay-Rheims (Challoner), fri engelsk tekst",web:"World English Bible, katolsk utgave, fri moderne engelsk tekst",nb:"En Levende Bok (Biblica Open, CC BY-SA), en norsk tankeoversettelse, ikke ordrett"},
+ en:{drc:"Douay-Rheims (Challoner), public-domain English",web:"World English Bible, Catholic edition, public-domain modern English",nb:"En Levende Bok (Biblica Open, CC BY-SA), a Norwegian thought-for-thought translation"}};
+const TRS_SHORT={drc:'Douay-Rheims',web:'WEB',nb:'Levende Bok'};
+const rtrPref=()=>store.get('cf_rtr_'+lang,lang==='no'?'nb':'drc');
+const effTr=(tr,id)=>(tr==='nb'&&id<47)?'drc':tr;   // Det gamle testamente finnes ikke gratis på norsk
+async function loadBookT(tr,id){
+  tr=effTr(tr,id); const k=tr+id; if(BCACHE[k])return {data:BCACHE[k],tr};
+  const r=await fetch(TRS[tr].dir+'/'+id+'.json'); if(!r.ok)throw new Error('x');
+  BCACHE[k]=await r.json(); return {data:BCACHE[k],tr};
+}
+async function loadBook(id){return (await loadBookT('drc',id)).data}   // Douay-Rheims
+async function loadBookL(id){try{return await loadBookT(lang==='no'?'nb':'drc',id)}catch(e){return await loadBookT('drc',id)}}   // tekst på brukerens språk
+/* verstekst på brukerens språk, med reserve fra Douay-Rheims når et vers mangler */
+async function passage(id,ch,v1,v2){
+  const L=await loadBookL(id); let vs=(L.data[ch-1]||[]).slice(v1-1,v2); let tr=L.tr;
+  if(!vs.some(Boolean)){ if(tr!=='drc'){const D=await loadBookT('drc',id); vs=(D.data[ch-1]||[]).slice(v1-1,v2); tr='drc'} }
+  return {vs:vs.filter(Boolean),tr};
 }
 function mk(tag,cls,txt){const e=document.createElement(tag);if(cls)e.className=cls;if(txt!==undefined)e.textContent=txt;return e}
 function clearSel(){sel.clear();$('#selbar').classList.remove('show');$$('.text .v.sel').forEach(x=>x.classList.remove('sel'))}
+let RCUR=null;
 function renderRead(){
   const root=$('#readRoot'); if(!root)return; const t=R[lang]; clearSel(); root.innerHTML='';
   $('#selCopy').textContent=t.copy; $('#selShare').textContent=t.share;
   const wrap=mk('div','rd'); root.appendChild(wrap);
   if(!BIDX){wrap.appendChild(mk('div','lead',t.loading));return}
+  const pref=rtrPref();
   if(rs.mode==='books'){
     wrap.appendChild(mk('h1','',t.title)); wrap.appendChild(mk('div','lead',t.lead));
     const sv=rsaved(), sb=sv&&bookById(sv.book);
     if(sb&&!rs.q){const r=mk('button','resume'); r.appendChild(mk('small','',t.resume)); r.appendChild(mk('b','',bname(sb)+' '+sv.ch)); r.onclick=()=>openChapter(sv.book,sv.ch); wrap.appendChild(r)}
-    const seg=mk('div','seg');
+    const chips=mk('div','chips'); chips.style.margin='0 0 10px';
+    (lang==='no'?['nb','drc','web']:['drc','web','nb']).forEach(k=>{const b=mk('button',pref===k?'on':'',TRS_SHORT[k]+(k==='nb'?' (NT)':'')); b.type='button'; b.onclick=()=>{store.set('cf_rtr_'+lang,k);renderRead()}; chips.appendChild(b)});
+    wrap.appendChild(chips);
+    if(pref==='nb')wrap.appendChild(mk('div','src',t.nbnote));
+    const seg=mk('div','seg'); seg.style.marginTop='10px';
     [[0,t.ot],[1,t.nt]].forEach(([v,l])=>{const b=mk('button',rs.nt===v?'on':'',l);b.onclick=()=>{rs.nt=v;rs.q='';renderRead()};seg.appendChild(b)});
     wrap.appendChild(seg);
     const s=mk('input','search'); s.type='search'; s.placeholder=t.search; s.value=rs.q; s.autocomplete='off';
@@ -462,40 +484,52 @@ function renderRead(){
   } else if(rs.mode==='chapters'){
     const b=bookById(rs.book);
     const back=mk('button','back',t.back); back.onclick=()=>{rs.mode='books';renderRead()}; wrap.appendChild(back);
-    wrap.appendChild(mk('h1','',bname(b))); wrap.appendChild(mk('div','lead',b.ch+' '+t.chapters+(DEU_BOOKS.has(b.id)?' · '+t.deu:'')));
-    const g=mk('div','chs'); for(let i=1;i<=b.ch;i++){const e=mk('button','',String(i));e.onclick=()=>openChapter(b.id,i);g.appendChild(e)} wrap.appendChild(g);
+    wrap.appendChild(mk('h1','',bname(b)));
+    const lead=mk('div','lead',t.loading); wrap.appendChild(lead);
+    const g=mk('div','chs'); wrap.appendChild(g);
+    loadBookT(pref,b.id).then(({data,tr})=>{
+      if(rs.mode!=='chapters'||rs.book!==b.id)return;
+      lead.textContent=data.length+' '+t.chapters+(DEU_BOOKS.has(b.id)?' · '+t.deu:'')+' · '+TRS_SHORT[tr]+(tr!==pref?' ('+t.fallback+')':'');
+      for(let i=1;i<=data.length;i++){const e=mk('button','',String(i));e.onclick=()=>openChapter(b.id,i);g.appendChild(e)}
+    }).catch(()=>{lead.textContent=t.fail});
   } else {
     const b=bookById(rs.book); const back=mk('button','back',t.back); back.onclick=()=>{rs.mode='chapters';renderRead();$('#view-read').scrollTop=0}; wrap.appendChild(back);
-    wrap.appendChild(mk('h1','',bname(b)+' '+rs.ch));
-    const tools=mk('div','rtools'); tools.appendChild(mk('div','lead',lang==='no'?'Trykk på et vers for å kopiere eller dele':'Tap a verse to copy or share'));
+    const h1=mk('h1','',bname(b)+' '+rs.ch); wrap.appendChild(h1);
+    const tools=mk('div','rtools'); tools.appendChild(mk('div','lead',t.tapv));
     const sz=mk('div','sz'); [['A−',-2],['A+',2]].forEach(([l,d])=>{const x=mk('button','',l);x.onclick=()=>{store.set('cf_rsize',String(Math.min(30,Math.max(15,rsize()+d))));const tx=$('.text');if(tx)tx.style.fontSize=rsize()+'px'};sz.appendChild(x)});
     tools.appendChild(sz); wrap.appendChild(tools);
     const box=mk('div','text'); box.style.fontSize=rsize()+'px'; wrap.appendChild(box);
     box.appendChild(mk('div','lead',t.loading));
-    loadBook(b.id).then(d=>{
-      if(rs.mode!=='text'||rs.book!==b.id)return; box.innerHTML='';
-      const p=mk('p'); d[rs.ch-1].forEach((v,i)=>{const s=mk('span','v'); s.dataset.n=i+1; const n=mk('sup','',String(i+1)); s.appendChild(n); s.appendChild(document.createTextNode(v+' ')); p.appendChild(s)});
+    const nav=mk('div','chnav'); const pv=mk('button','',t.prev), nx=mk('button','',t.next); pv.disabled=true; nx.disabled=true;
+    pv.onclick=()=>stepChapter(-1); nx.onclick=()=>stepChapter(1); nav.appendChild(pv); nav.appendChild(nx); wrap.appendChild(nav);
+    const foot=mk('div'); wrap.appendChild(foot);
+    loadBookT(pref,b.id).then(({data,tr})=>{
+      if(rs.mode!=='text'||rs.book!==b.id)return;
+      if(rs.ch>data.length)rs.ch=data.length; if(rs.ch<1)rs.ch=1; h1.textContent=bname(b)+' '+rs.ch; RCUR={data,tr,id:b.id,ch:rs.ch}; box.innerHTML='';
+      const p=mk('p'); data[rs.ch-1].forEach((v,i)=>{ if(!v)return; const s=mk('span','v'); s.dataset.n=i+1; s.appendChild(mk('sup','',String(i+1))); s.appendChild(document.createTextNode(v+' ')); p.appendChild(s)});
       box.appendChild(p);
       box.onclick=e=>{const v=e.target.closest('.v'); if(!v)return; const n=+v.dataset.n; sel.has(n)?sel.delete(n):sel.add(n); v.classList.toggle('sel',sel.has(n)); $('#selbar').classList.toggle('show',sel.size>0)};
+      pv.disabled=(b.id===1&&rs.ch===1); nx.disabled=(b.id===73&&rs.ch>=data.length);
+      if(tr!==pref)foot.appendChild(mk('div','src',t.fallback));
+      if(b.id===21)foot.appendChild(mk('div','src',tr==='web'?t.psalmWeb:t.psalm));
+      const src=mk('div','src',TRN[lang][tr]+'. '+t.src+' '); const a=mk('a','','lsbible.org'); a.href='https://read.lsbible.org/'; a.target='_blank'; a.rel='noopener'; src.appendChild(a); foot.appendChild(src);
     }).catch(()=>{box.innerHTML='';box.appendChild(mk('div','lead',t.fail))});
-    const nav=mk('div','chnav'); const pv=mk('button','',t.prev), nx=mk('button','',t.next);
-    pv.disabled=(rs.book===1&&rs.ch===1); nx.disabled=(rs.book===73&&rs.ch===b.ch);
-    pv.onclick=()=>stepChapter(-1); nx.onclick=()=>stepChapter(1); nav.appendChild(pv); nav.appendChild(nx); wrap.appendChild(nav);
-    if(b.id===21)wrap.appendChild(mk('div','src',t.psalm));
-    const src=mk('div','src',t.src+' '); const a=mk('a','','lsbible.org'); a.href='https://read.lsbible.org/'; a.target='_blank'; a.rel='noopener'; src.appendChild(a); wrap.appendChild(src);
   }
 }
 function openChapter(id,ch){rs.book=id;rs.ch=ch;rs.mode='text';store.set('cf_read',JSON.stringify({book:id,ch}));renderRead();$('#view-read').scrollTop=0}
-function stepChapter(d){
-  let id=rs.book, ch=rs.ch+d, b=bookById(id);
-  if(ch<1){id--; b=bookById(id); ch=b.ch} else if(ch>b.ch){id++; ch=1}
-  openChapter(id,ch);
+async function stepChapter(d){
+  try{
+    const pref=rtrPref(); const cur=await loadBookT(pref,rs.book); let id=rs.book, ch=rs.ch+d;
+    if(ch<1){ if(id===1)return; id--; const pr=await loadBookT(pref,id); ch=pr.data.length }
+    else if(ch>cur.data.length){ if(id===73)return; id++; ch=1 }
+    openChapter(id,ch);
+  }catch(e){}
 }
 function selText(){
-  const b=bookById(rs.book), d=BCACHE[rs.book]; const ns=[...sel].sort((a,c)=>a-c);
+  const b=bookById(rs.book), d=RCUR&&RCUR.data; if(!d)return ''; const ns=[...sel].sort((a,c)=>a-c);
   const body=ns.map(n=>(ns.length>1?n+' ':'')+d[rs.ch-1][n-1]).join(' ');
   const ref=bname(b)+' '+rs.ch+':'+(ns.length===1?ns[0]:ns[0]+(ns.length>1&&ns[ns.length-1]-ns[0]===ns.length-1?'–':',')+ns[ns.length-1]);
-  return '“'+body+'” — '+ref;
+  return '“'+body+'” — '+ref+' ('+TRS_SHORT[RCUR.tr]+')';
 }
 $('#selCopy').addEventListener('click',async()=>{const x=selText();try{await navigator.clipboard.writeText(x);toast(R[lang].copied)}catch(e){toast(x)}clearSel()});
 $('#selShare').addEventListener('click',async()=>{const x=selText();try{if(navigator.share){await navigator.share({text:x});clearSel();return}}catch(e){return}try{await navigator.clipboard.writeText(x);toast(R[lang].copied)}catch(e){toast(x)}clearSel()});
@@ -531,11 +565,14 @@ async function verseCard(ref){
   if(!m){card.classList.add('bad');card.textContent=t.nover;return card}
   const id=findBook(m[1]); if(!id){card.classList.add('bad');card.textContent=ref+' '+t.nover;return card}
   try{
-    const d=await loadBook(id), ch=+m[2], v1=m[3]?+m[3]:1, v2=m[4]?Math.min(+m[4],v1+11):(m[3]?v1:Math.min(d[ch-1]?.length||0,6));
-    const vs=d[ch-1]; if(!vs||v1<1||v1>vs.length){card.classList.add('bad');card.textContent=ref+' '+t.nover;return card}
-    const end=Math.min(v2,vs.length); const parts=[]; for(let i=v1;i<=end;i++)parts.push((end>v1?i+' ':'')+vs[i-1]);
-    card.appendChild(document.createTextNode(parts.join(' ')));
-    const b=bookById(id); card.appendChild(mk('cite','',bname(b)+' '+ch+(m[3]||!m[3]?':'+v1+(end>v1?'–'+end:''):'')+' · Douay-Rheims'));
+    const ch=+m[2], v1=m[3]?+m[3]:1;
+    const L0=await loadBookL(id); const n0=(L0.data[ch-1]||[]).length;
+    const v2=m[4]?Math.min(+m[4],v1+11):(m[3]?v1:Math.min(n0,6));
+    if(!n0||v1<1||v1>n0){card.classList.add('bad');card.textContent=ref+' '+t.nover;return card}
+    const end=Math.min(v2,n0); const P=await passage(id,ch,v1,end);
+    if(!P.vs.length){card.classList.add('bad');card.textContent=ref+' '+t.nover;return card}
+    card.appendChild(document.createTextNode(P.vs.map((x,i)=>(P.vs.length>1?(v1+i)+' ':'')+x).join(' ')));
+    const b=bookById(id); card.appendChild(mk('cite','',bname(b)+' '+ch+':'+v1+(end>v1?'–'+end:'')+' · '+TRS_SHORT[P.tr]));
   }catch(e){card.classList.add('bad');card.textContent=ref+' '+t.nover}
   return card;
 }
@@ -640,7 +677,7 @@ function renderGuideList(){
 
 /* Tekster og innhold */
 function render(){
-  const t=T[lang]; document.documentElement.lang=lang;
+  const t=T[lang]; document.documentElement.lang=lang; DV_CUR=null; if(typeof loadDayVerse==='function')setTimeout(loadDayVerse,0);
   const et=$('#enterText'); if(et) et.textContent=isTouch?t.enterTouch:t.enter;
   $('#tag').textContent=t.tag; $('#vMeta').textContent=t.daily+' · '+today.toLocaleDateString(lang==='no'?'nb-NO':'en-GB',{day:'numeric',month:'long'});
   const v=curVerse(); $('#vText').textContent=v[0]; $('#vRef').textContent=v[1];

@@ -6,6 +6,9 @@ const LN={
      speed:"Hastighet",music:"Bakgrunnsmusikk",ambient:"Rolig ambient",shuffle:"Tilfeldig",addm:"+ Legg til egen musikk",
      mnote:"Musikken du legger til lagres bare på denne enheten og lastes aldri opp. Du kan velge lydfiler eller videoer, og appen spiller bare lyden.",
      vol:"Volum",next:"Neste",fav:"Favoritt",nov:"Fant ingen stemme på denne enheten for dette språket. Lyden bruker enhetens standardstemme.",nowp:"Spiller nå",
+     audio:"Lyd og musikk",audioSub:"Legg til din egen musikk, velg stemme",voice:"Stemme",vEn:"Engelsk stemme",vNo:"Norsk stemme",auto:"Automatisk",try:"Prøv",
+     tryEn:"The Lord is my shepherd; I shall not want.",tryNo:"Herren er min hyrde, jeg mangler ingenting.",
+     vhint:"Tips: på iPhone kan du laste ned bedre stemmer under Innstillinger › Tilgjengelighet › Opplest innhold › Stemmer. Velg for eksempel engelsk (Storbritannia) og en utvidet eller premium-stemme. Den dukker opp i listen her.",
      stories:["Natten i Betlehem","Veien til Damaskus","Den barmhjertige samaritan"]},
  en:{title:"Listen",lead:"The Bible, guides and stories. Listen calmly, even in the car.",today:"Today's lesson",resume:"Continue where you left off",
      tabs:{bible:"Bible",guides:"Guides",stories:"Stories",favs:"Favorites"},engNote:"English text",min:"min",
@@ -13,6 +16,9 @@ const LN={
      speed:"Speed",music:"Background music",ambient:"Calm ambient",shuffle:"Shuffle",addm:"+ Add your own music",
      mnote:"Music you add is stored only on this device and is never uploaded. You can pick audio files or videos; the app plays just the sound.",
      vol:"Volume",next:"Next",fav:"Favorite",nov:"No voice found on this device for this language. Audio uses the device's default voice.",nowp:"Now playing",
+     audio:"Audio and music",audioSub:"Add your own music, choose a voice",voice:"Voice",vEn:"English voice",vNo:"Norwegian voice",auto:"Automatic",try:"Try",
+     tryEn:"The Lord is my shepherd; I shall not want.",tryNo:"Herren er min hyrde, jeg mangler ingenting.",
+     vhint:"Tip: on iPhone you can download better voices under Settings › Accessibility › Spoken Content › Voices. Pick for example English (UK) and an enhanced or premium voice. It will show up in the list here.",
      stories:["The night in Bethlehem","The road to Damascus","The Good Samaritan"]}
 };
 /* Bibellesninger (engelsk Douay-Rheims fra Bibelen i appen) */
@@ -47,15 +53,21 @@ const toggleFav=id=>{let f=favs();f=f.includes(id)?f.filter(x=>x!==id):[...f,id]
 /* ---------- Innhold ---------- */
 function allItems(){
   const t=LN[lang], out={bible:[],guides:[],stories:[]};
-  READINGS.forEach(r=>out.bible.push({id:r.id,kind:'bible',title:r[lang],sub:(lang==='no'?t.engNote+' · ':'')+r.ref,lang:'en',text:()=>refText(r.ref).then(v=>[r.en,...v])}));
+  READINGS.forEach(r=>{
+    const nbOK=lang==='no'&&findBook(r.ref.split(' ')[0])>=47;
+    const it={id:r.id,kind:'bible',title:r[lang],sub:nbOK?r.ref:(lang==='no'?t.engNote+' · ':'')+r.ref,lang:nbOK?'app':'en'};
+    it.text=async()=>{const L=await refTextL(r.ref); it.lang=L.tr==='nb'?'app':'en'; return [r[L.tr==='nb'?'no':'en'],...L.parts]};
+    out.bible.push(it);
+  });
   GUIDES.forEach((G,gi)=>G.L.forEach((L,li)=>out.guides.push({id:'gd-'+gi+'-'+li,kind:'guides',series:G[lang],title:L[lang][0],sub:G[lang]+' · '+t.ep+' '+(li+1),lang:'app',text:()=>Promise.resolve(L[lang])})));
   STORIES.forEach((S,i)=>out.stories.push({id:S.id,kind:'stories',title:t.stories[i],sub:S.ref,lang:'app',text:()=>Promise.resolve(S[lang])}));
   return out;
 }
-async function refText(ref){
-  const m=ref.match(/^\s*([1-3]?[A-Za-zÆØÅæøå]+)\s+(\d+):(\d+)-(\d+)\s*$/); const id=findBook(m[1]); const d=await loadBook(id); const vs=d[+m[2]-1];
-  return vs.slice(+m[3]-1,+m[4]);
+async function refTextL(ref){
+  const m=ref.match(/^\s*([1-3]?[A-Za-zÆØÅæøå]+)\s+(\d+):(\d+)-(\d+)\s*$/); const id=findBook(m[1]);
+  const P=await passage(id,+m[2],+m[3],+m[4]); return {parts:P.vs,tr:P.tr};
 }
+const refText=async ref=>(await refTextL(ref)).parts;
 function chunkText(parts){
   const out=[];
   parts.forEach(p=>{
@@ -76,6 +88,7 @@ function chunkText(parts){
 const TTS={chunks:[],i:0,playing:false,speed:+store.get('cf_speed','1'),item:null,queue:[],qi:0,lang:'en',tok:0,timer:null};
 function pickVoice(l){
   const vs=speechSynthesis.getVoices(); if(!vs.length)return null;
+  const saved=store.get('cf_voice_'+(l==='en'?'en':'no'),''); if(saved){const sv=vs.find(v=>v.name===saved);if(sv)return sv}
   if(l==='en'){
     const gb=vs.filter(v=>/en[-_]GB/i.test(v.lang));
     return gb.find(v=>/daniel|arthur|oliver|male|george/i.test(v.name))||gb[0]||vs.find(v=>/^en/i.test(v.lang))||null;
@@ -103,8 +116,7 @@ function speakChunk(){
 function saveResume(){if(TTS.item)store.set('cf_resume',JSON.stringify({id:TTS.item.id,i:TTS.i}))}
 async function startItem(item,queue,at){
   TTS.queue=queue||[item]; TTS.qi=Math.max(0,TTS.queue.findIndex(x=>x.id===item.id)); TTS.item=item;
-  TTS.lang=item.lang==='en'?'en':lang;
-  const parts=await item.text(); TTS.chunks=chunkText(parts); TTS.i=Math.min(at||0,Math.max(0,TTS.chunks.length-1));
+  const parts=await item.text(); TTS.lang=item.lang==='en'?'en':lang; TTS.chunks=chunkText(parts); TTS.i=Math.min(at||0,Math.max(0,TTS.chunks.length-1));
   TTS.playing=true; MUS.start(); speakChunk(); setMedia(); buildPlayer(); showMini(); renderListen();
 }
 function pauseTTS(){TTS.playing=false;TTS.tok++;speechSynthesis.cancel();MUS.pause();uiTick()}
@@ -213,6 +225,11 @@ function renderListen(){
   // fortsett
   const rs=jget('cf_resume',null), ri=rs&&[...ALL,...(typeof genArchive==='function'?[...genArchive('story'),...genArchive('lesson')].map(genItem):[])].find(x=>x.id===rs.id);
   if(ri&&rs.i>0){const r=mk('button','hero alt'); const rx=mk('div'); rx.appendChild(mk('small','',t.resume)); rx.appendChild(mk('b','',ri.title)); r.appendChild(rx); r.appendChild(mk('div','pl','▶')); r.onclick=()=>startItem(ri,A[ri.kind]||[ri],rs.i); w.appendChild(r)}
+  // Lyd og musikk (åpne/lukk)
+  const mo=store.get('cf_musopen','0')==='1';
+  const mb=mk('button','row2'); mb.appendChild(mk('div','ic','♪')); const mtx=mk('div','tx'); mtx.appendChild(mk('b','',t.audio)); mtx.appendChild(mk('small','',t.audioSub)); mb.appendChild(mtx); mb.appendChild(mk('span','fav',mo?'⌃':'⌄'));
+  mb.onclick=()=>{store.set('cf_musopen',mo?'0':'1');renderListen()}; w.appendChild(mb);
+  if(mo){const pn=mk('div','mus');pn.id='lytMus';w.appendChild(pn);fillMusic(pn)}
   const seg=mk('div','seg'); seg.style.marginTop='16px';
   Object.entries(t.tabs).forEach(([k,lbl])=>{const b=mk('button',lt===k?'on':'',lbl);b.onclick=()=>{lt=k;renderListen()};seg.appendChild(b)}); w.appendChild(seg);
   const fv=favs();
@@ -258,9 +275,31 @@ function uiTick(){
   const pl=$('#pPlay'); if(pl){pl.textContent=TTS.playing?'❚❚':'▶';$('#pBar').style.width=pct+'%';$('#pLine').textContent=TTS.chunks[TTS.i]||'';$('#pSpd').textContent=TTS.speed+'×';$('#pArt').classList.toggle('pulse',TTS.playing);
     const f=$('#pFav'); if(f){const on=favs().includes(it.id);f.textContent=on?'♥':'♡';f.style.color=on?'#C0392B':''}}
 }
-function buildMusicPanel(){
-  const box=$('#pMus'); if(!box)return; const t=LN[lang]; box.innerHTML='';
-  const h=mk('div','h'); h.appendChild(mk('span','',t.music)); const sw=mk('div','sw'+(MUS.on?' on':'')); sw.onclick=()=>{MUS.on=!MUS.on;MUS.save();if(MUS.on&&TTS.playing)MUS.start();else MUS.stop();buildMusicPanel()}; h.appendChild(sw); box.appendChild(h);
+function buildMusicPanel(){const a=$('#pMus');if(a)fillMusic(a);const b=$('#lytMus');if(b)fillMusic(b)}
+function voiceList(l){
+  const vs=speechSynthesis.getVoices();
+  const f=l==='en'?vs.filter(v=>/^en/i.test(v.lang)):vs.filter(v=>/^(nb|no|nn)/i.test(v.lang));
+  const q=v=>/premium|enhanced|natural|neural|siri/i.test(v.name)?0:1; const gb=v=>/en[-_]GB/i.test(v.lang)?0:1;
+  return f.sort((a,b)=>q(a)-q(b)||gb(a)-gb(b)||a.name.localeCompare(b.name));
+}
+function fillMusic(box){
+  const t=LN[lang]; box.innerHTML='';
+  // Stemme
+  const vh=mk('div','h'); vh.appendChild(mk('span','',t.voice)); box.appendChild(vh);
+  [['en',t.vEn,t.tryEn],['no',t.vNo,t.tryNo]].forEach(([l2,label,sample])=>{
+    const row=mk('div','vol'); row.style.margin='8px 0'; row.appendChild(mk('span','',label));
+    const sel=mk('select'); sel.style.cssText='flex:1;min-width:0;padding:8px;border-radius:10px;border:1px solid var(--line);background:#fff;font:inherit;font-size:13px;color:var(--ink)';
+    const a=mk('option','',t.auto); a.value=''; sel.appendChild(a);
+    voiceList(l2).forEach(v=>{const o=mk('option','',v.name+' ('+v.lang+')'); o.value=v.name; sel.appendChild(o)});
+    const saved=store.get('cf_voice_'+l2,''); sel.value=saved; if(sel.value!==saved)sel.value='';
+    sel.onchange=()=>store.set('cf_voice_'+l2,sel.value);
+    const tr=mk('button','',t.try); tr.type='button'; tr.style.cssText='padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:#fff;font-size:13px';
+    tr.onclick=()=>{try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(sample);const v=pickVoice(l2);if(v){u.voice=v;u.lang=v.lang}else u.lang=l2==='en'?'en-GB':'nb-NO';u.rate=0.9*TTS.speed;u.pitch=l2==='en'?0.8:0.85;speechSynthesis.speak(u)}catch(e){}};
+    row.appendChild(sel); row.appendChild(tr); box.appendChild(row);
+  });
+  box.appendChild(mk('div','mnote',t.vhint));
+  // Musikk
+  const h=mk('div','h'); h.style.marginTop='16px'; h.appendChild(mk('span','',t.music)); const sw=mk('div','sw'+(MUS.on?' on':'')); sw.onclick=()=>{MUS.on=!MUS.on;MUS.save();if(MUS.on&&TTS.playing)MUS.start();else MUS.stop();buildMusicPanel()}; h.appendChild(sw); box.appendChild(h);
   const chips=mk('div','chips');
   const chip=(label,val)=>{const b=mk('button',MUS.sel===val?'on':'',label);b.onclick=()=>{MUS.sel=val;MUS.save();if(TTS.playing&&MUS.on){MUS.stop();MUS.start()}buildMusicPanel()};return b};
   chips.appendChild(chip(t.ambient,'ambient'));
@@ -274,7 +313,7 @@ function buildMusicPanel(){
   if(!pickVoice(TTS.lang)&&speechSynthesis.getVoices().length)box.appendChild(mk('div','mnote',t.nov));
 }
 /* Start */
-if('speechSynthesis' in window){speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=()=>{}}
+if('speechSynthesis' in window){speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=()=>{try{buildMusicPanel()}catch(e){}}}
 /* Lås opp lyd ved første trykk (iPhone krever det) */
 let unlocked=false;
 addEventListener('pointerdown',()=>{
