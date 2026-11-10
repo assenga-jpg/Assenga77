@@ -340,6 +340,7 @@ body.chatting nav.tabs{display:none}
 
 <link rel="stylesheet" href="listen.css">
 <script src="guides.js"></script>
+<script src="verses.js"></script>
 <script>
 /* ---------- Tekster (norsk/engelsk) ---------- */
 const T={
@@ -414,7 +415,21 @@ const rsaved=()=>{try{return JSON.parse(store.get('cf_read','null'))}catch(e){re
 const rsize=()=>+store.get('cf_rsize','20');
 const bname=b=>lang==='no'?b.no:b.en.replace(/^III /,'3 ').replace(/^II /,'2 ').replace(/^I /,'1 ').replace('Revelation of John','Revelation').replace('Song of Solomon','Song of Songs');
 const bookById=id=>BIDX&&BIDX.find(b=>b.id===id);
-fetch('bible/index.json').then(r=>r.json()).then(j=>{BIDX=j;renderRead()}).catch(()=>{});
+/* Dagens vers: nytt hver dag, hentet fra Bibelen i appen (Douay-Rheims) */
+let DV_CUR=null;
+const curVerse=()=>DV_CUR?[DV_CUR.text,DV_CUR.ref]:VERSES[dayOfYear%VERSES.length];
+async function loadDayVerse(){
+  try{
+    const list=typeof DAILY_VERSES!=='undefined'?DAILY_VERSES:[]; if(!list.length||!BIDX)return;
+    const n=Math.floor((Date.UTC(today.getFullYear(),today.getMonth(),today.getDate())-Date.UTC(2026,0,1))/864e5);
+    const ref=list[((n%list.length)+list.length)%list.length];
+    const m=ref.match(/^(\S+) (\d+):(\d+)(?:-(\d+))?$/); const id=findBook(m[1]); const d=await loadBook(id);
+    const v1=+m[3],v2=+(m[4]||m[3]); const vs=d[+m[2]-1].slice(v1-1,v2); if(!vs.length)return;
+    DV_CUR={text:vs.join(' '),ref:bname(bookById(id))+' '+m[2]+':'+v1+(v2>v1?'–'+v2:'')};
+    const t=$('#vText'),r=$('#vRef'); if(t){t.textContent=DV_CUR.text;r.textContent=DV_CUR.ref}
+  }catch(e){}
+}
+fetch('bible/index.json').then(r=>r.json()).then(j=>{BIDX=j;renderRead();loadDayVerse()}).catch(()=>{});
 async function loadBook(id){
   if(BCACHE[id])return BCACHE[id];
   const r=await fetch('bible/'+id+'.json'); if(!r.ok)throw new Error('x');
@@ -617,6 +632,10 @@ function renderGuideList(){
     const m=mk('div'); m.appendChild(mk('b','',G[lang])); m.appendChild(mk('small','',dn+' / '+tot+' '+t.les)); const bar=mk('div','bar'); const bi=mk('i'); bi.style.width=(dn/tot*100)+'%'; bar.appendChild(bi); m.appendChild(bar); c.appendChild(m);
     c.appendChild(mk('span','','›')); c.onclick=()=>openGuide(i); box.appendChild(c);
   });
+  if(typeof openAiLessons==='function'){
+    const D=DN[lang]; const c=mk('button','gcard'); const p=mk('div','gp paint'); p.style.backgroundSize='300%'; p.style.backgroundPosition='60% 40%'; c.appendChild(p);
+    const m=mk('div'); m.appendChild(mk('b','',D.lessons)); m.appendChild(mk('small','',D.lessonsSub)); c.appendChild(m); c.appendChild(mk('span','','›')); c.onclick=openAiLessons; box.appendChild(c);
+  }
 }
 
 /* Tekster og innhold */
@@ -624,7 +643,7 @@ function render(){
   const t=T[lang]; document.documentElement.lang=lang;
   const et=$('#enterText'); if(et) et.textContent=isTouch?t.enterTouch:t.enter;
   $('#tag').textContent=t.tag; $('#vMeta').textContent=t.daily+' · '+today.toLocaleDateString(lang==='no'?'nb-NO':'en-GB',{day:'numeric',month:'long'});
-  const v=VERSES[dayOfYear%VERSES.length]; $('#vText').textContent=v[0]; $('#vRef').textContent=v[1];
+  const v=curVerse(); $('#vText').textContent=v[0]; $('#vRef').textContent=v[1];
   $('#btnInterpret').textContent=t.interpret+' ›'; $('#btnShare').textContent=t.share+' ↗';
   const lesson=dayOfYear%t.lessons.length;
   $('#tjTitle').textContent=t.journey; $('#tjSub').textContent=t.day+' '+(lesson+1)+' · '+t.lessons[lesson];
@@ -646,13 +665,18 @@ function toast(msg){const el=$('#toast');el.textContent=msg;el.classList.add('sh
 $$('.lang button').forEach(b=>b.addEventListener('click',()=>{lang=b.dataset.lang;store.set('cf_lang',lang);render()}));
 $('#btnBegin').addEventListener('click',()=>{
   if(store.get('cf_done','')===todayKey)return;
-  const g=dayOfYear%GUIDES.length; let l=GUIDES[g].L.findIndex((_,i)=>!gdone(g,i)); if(l<0)l=0;
-  openLesson(g,l);
+  // Først dagens guide, så første ugjorte leksjon i en annen guide, og når alt er gjort: dagens nye AI-leksjon
+  const g0=dayOfYear%GUIDES.length;
+  for(let k=0;k<GUIDES.length;k++){
+    const g=(g0+k)%GUIDES.length, l=GUIDES[g].L.findIndex((_,i)=>!gdone(g,i));
+    if(l>=0){openLesson(g,l);return}
+  }
+  if(typeof openAiToday==='function')openAiToday();
 });
-$('#btnInterpret').addEventListener('click',()=>{const v=VERSES[dayOfYear%VERSES.length];openChat(CH[lang].interp+' '+v[1]+' — “'+v[0]+'”','study')});
+$('#btnInterpret').addEventListener('click',()=>{const v=curVerse();openChat(CH[lang].interp+' '+v[1]+' — “'+v[0]+'”','study')});
 $('#cats').addEventListener('click',e=>{const c=e.target.closest('.cat'); if(c)openChat(CH[lang].starts[+c.dataset.i]||'')});
 $('#btnShare').addEventListener('click',async()=>{
-  const v=VERSES[dayOfYear%VERSES.length], txt='“'+v[0]+'” — '+v[1];
+  const v=curVerse(), txt='“'+v[0]+'” — '+v[1];
   try{ if(navigator.share){await navigator.share({text:txt}); return} }catch(e){ return }
   try{await navigator.clipboard.writeText(txt);toast(T[lang].copied)}catch(e){toast(txt)}
 });
@@ -665,6 +689,8 @@ $$('nav.tabs button').forEach(b=>b.addEventListener('click',()=>{
 }));
 render();
 </script>
+<script src="plan.js"></script>
 <script src="listen.js"></script>
+<script src="daily.js"></script>
 </body>
 </html>

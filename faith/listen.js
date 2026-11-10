@@ -205,11 +205,14 @@ function renderListen(){
   // dagens leksjon
   const g=dayOfYear%GUIDES.length; let l=GUIDES[g].L.findIndex((_,i)=>!gdone(g,i)); if(l<0)l=0;
   const dItem=A.guides.find(x=>x.id==='gd-'+g+'-'+l);
+  const allDone=GUIDES.every((G,gi)=>G.L.every((_,li)=>gdone(gi,li)));
+  if(allDone&&typeof genHero==='function'){w.appendChild(genHero('lesson'))}
+  else{
   const h=mk('button','hero'); const hx=mk('div'); hx.appendChild(mk('small','',t.today)); hx.appendChild(mk('b','',dItem.title)); h.appendChild(hx); h.appendChild(mk('div','pl','▶'));
-  h.onclick=()=>startItem(dItem,A.guides.filter(x=>x.id.startsWith('gd-'+g+'-')),0); w.appendChild(h);
+  h.onclick=()=>startItem(dItem,A.guides.filter(x=>x.id.startsWith('gd-'+g+'-')),0); w.appendChild(h);}
   // fortsett
-  const rs=jget('cf_resume',null), ri=rs&&ALL.find(x=>x.id===rs.id);
-  if(ri&&rs.i>0){const r=mk('button','hero alt'); const rx=mk('div'); rx.appendChild(mk('small','',t.resume)); rx.appendChild(mk('b','',ri.title)); r.appendChild(rx); r.appendChild(mk('div','pl','▶')); r.onclick=()=>startItem(ri,A[ri.kind],rs.i); w.appendChild(r)}
+  const rs=jget('cf_resume',null), ri=rs&&[...ALL,...(typeof genArchive==='function'?[...genArchive('story'),...genArchive('lesson')].map(genItem):[])].find(x=>x.id===rs.id);
+  if(ri&&rs.i>0){const r=mk('button','hero alt'); const rx=mk('div'); rx.appendChild(mk('small','',t.resume)); rx.appendChild(mk('b','',ri.title)); r.appendChild(rx); r.appendChild(mk('div','pl','▶')); r.onclick=()=>startItem(ri,A[ri.kind]||[ri],rs.i); w.appendChild(r)}
   const seg=mk('div','seg'); seg.style.marginTop='16px';
   Object.entries(t.tabs).forEach(([k,lbl])=>{const b=mk('button',lt===k?'on':'',lbl);b.onclick=()=>{lt=k;renderListen()};seg.appendChild(b)}); w.appendChild(seg);
   const fv=favs();
@@ -219,9 +222,10 @@ function renderListen(){
     const f=mk('span','fav'+(fv.includes(it.id)?' on':''),fv.includes(it.id)?'♥':'♡'); f.onclick=e=>{e.stopPropagation();toggleFav(it.id);renderListen()}; r.appendChild(f);
     r.onclick=()=>startItem(it,list,0); return r;
   };
+  const hasGen=typeof genHero==='function';
   if(lt==='bible')A.bible.forEach(it=>w.appendChild(row(it,A.bible)));
-  else if(lt==='stories')A.stories.forEach(it=>w.appendChild(row(it,A.stories)));
-  else if(lt==='guides'){GUIDES.forEach((G,gi)=>{w.appendChild(mk('div','gh',G[lang]));const list=A.guides.filter(x=>x.id.startsWith('gd-'+gi+'-'));list.forEach(it=>w.appendChild(row(it,list)))})}
+  else if(lt==='stories'){if(hasGen){const hg=genHero('story',true);hg.style.marginTop='12px';w.appendChild(hg);w.appendChild(genRows('story',row))}A.stories.forEach(it=>w.appendChild(row(it,A.stories)))}
+  else if(lt==='guides'){if(hasGen){const hg=genHero('lesson',true);hg.style.marginTop='12px';w.appendChild(hg);w.appendChild(genRows('lesson',row))}GUIDES.forEach((G,gi)=>{w.appendChild(mk('div','gh',G[lang]));const list=A.guides.filter(x=>x.id.startsWith('gd-'+gi+'-'));list.forEach(it=>w.appendChild(row(it,list)))})}
   else {const list=ALL.filter(x=>fv.includes(x.id)); if(!list.length)w.appendChild(mk('div','empty2',t.noFav)); list.forEach(it=>w.appendChild(row(it,list)))}
 }
 
