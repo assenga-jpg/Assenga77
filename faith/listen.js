@@ -399,6 +399,10 @@ function fillMusic(box){
   const add=mk('label','addm',t.addm); const fi=mk('input'); fi.type='file'; fi.accept='audio/*,video/*'; fi.multiple=true; fi.style.display='none'; fi.onchange=()=>{if(fi.files.length)MUS.add([...fi.files])}; add.appendChild(fi); box.appendChild(add);
   box.appendChild(mk('div','mnote',t.mnote));
   if(!pickVoice(TTS.lang)&&speechSynthesis.getVoices().length)box.appendChild(mk('div','mnote',t.nov));
+  const qn=mk('div','mnote',''); box.appendChild(qn);
+  fetch(WORKER_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quota:1})}).then(r=>r.json()).then(q=>{
+    if(q&&q.azure)qn.textContent=(lang==='no'?'Engelsk AI-stemme denne måneden: ':'English AI voice this month: ')+Math.round(q.used/1000)+' / '+Math.round(q.limit/1000)+(lang==='no'?' tusen tegn brukt. Når den er full, bruker appen en gratis reservestemme.':' thousand characters used. When full, the app uses a free backup voice.');
+  }).catch(()=>{});
 }
 /* Start */
 if('speechSynthesis' in window){speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=()=>{try{buildMusicPanel()}catch(e){}}}
