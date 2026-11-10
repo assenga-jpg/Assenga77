@@ -68,7 +68,7 @@ async function refTextL(ref,forceEn){
   const P=await passage(id,+m[2],+m[3],+m[4],forceEn); return {parts:P.vs,tr:P.tr};
 }
 const refText=async(ref,en)=>(await refTextL(ref,en)).parts;
-function resetPlayer(){try{pauseTTS()}catch(e){} try{stopVoice()}catch(e){} TTS.item=null;TTS.chunks=[];TTS.i=0;TTS.queue=[];TTS.loading=false;try{MUS.stop()}catch(e){} const m=$('#mini');if(m){m.classList.remove('show');const tt=m.querySelector('.t');if(tt)tt.textContent=''}const p=$('#player');if(p)p.remove()}
+function resetPlayer(){try{pauseTTS()}catch(e){} try{stopVoice()}catch(e){} TTS.item=null;TTS.chunks=[];TTS.i=0;TTS.queue=[];TTS.loading=false;TTS.mixed=false;TTS.voiceBlob=null;try{MUS.stop()}catch(e){} const m=$('#mini');if(m){m.classList.remove('show');const tt=m.querySelector('.t');if(tt)tt.textContent=''}const p=$('#player');if(p)p.remove()}
 function chunkText(parts){
   const out=[];
   parts.forEach(p=>{
@@ -86,7 +86,7 @@ function chunkText(parts){
 }
 
 /* ---------- Stemme: ekte lydfil fra serveren (AI-stemme), reserve = enhetens stemme ---------- */
-const TTS={chunks:[],i:0,playing:false,loading:false,speed:+store.get('cf_speed','1'),item:null,queue:[],qi:0,lang:'en',tok:0,mode:'device',el:null,dur:0,drag:false,lastSave:0};
+const TTS={chunks:[],i:0,playing:false,loading:false,speed:+store.get('cf_speed','1'),item:null,queue:[],qi:0,lang:'en',tok:0,mode:'device',mixed:false,voiceBlob:null,el:null,dur:0,drag:false,lastSave:0};
 function pickVoice(l){
   const vs=speechSynthesis.getVoices(); if(!vs.length)return null;
   const saved=store.get('cf_voice_'+(l==='en'?'en':'no'),''); if(saved){const sv=vs.find(v=>v.name===saved);if(sv)return sv}
@@ -128,11 +128,11 @@ async function getVoiceBlob(text,l){
 }
 function voiceEl(){
   if(TTS.el)return TTS.el;
-  const a=new Audio(); a.preload='auto'; a.setAttribute('playsinline','');
+  const a=new Audio(); a.preload='auto'; a.setAttribute('playsinline',''); a.style.display='none'; document.body.appendChild(a);
   a.addEventListener('timeupdate',()=>{if(TTS.mode!=='audio')return;saveResume();uiTick();posState()});
   a.addEventListener('ended',()=>{if(TTS.mode==='audio')finishItem()});
-  a.addEventListener('pause',()=>{if(TTS.mode==='audio'&&TTS.playing&&!a.ended&&!TTS.seeking){TTS.playing=false;MUS.pause();uiTick()}});
-  a.addEventListener('play',()=>{if(TTS.mode==='audio'&&!TTS.playing&&TTS.item){TTS.playing=true;MUS.start();uiTick()}});
+  a.addEventListener('pause',()=>{if(TTS.mode==='audio'&&TTS.playing&&!a.ended&&!TTS.seeking){TTS.playing=false;mPause();uiTick()}});
+  a.addEventListener('play',()=>{if(TTS.mode==='audio'&&!TTS.playing&&TTS.item){TTS.playing=true;mStart();uiTick()}});
   a.addEventListener('loadedmetadata',()=>{TTS.dur=a.duration;uiTick()});
   TTS.el=a; return a;
 }
@@ -153,6 +153,80 @@ function speakChunk(){
   },70);
   uiTick();
 }
+/* ---------- Miks stemme + musikk til ÉN lydfil på enheten (da virker låst skjerm, spoling og låseskjerm-kontroller som i en podcast) ---------- */
+function encodeWav(buf){
+  const d=buf.getChannelData(0), n=d.length, sr=buf.sampleRate, ab=new ArrayBuffer(44+n*2), v=new DataView(ab);
+  const ws=(p,s)=>[...s].forEach((c,i)=>v.setUint8(p+i,c.charCodeAt(0)));
+  ws(0,'RIFF');v.setUint32(4,36+n*2,true);ws(8,'WAVEfmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,sr,true);v.setUint32(28,sr*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);ws(36,'data');v.setUint32(40,n*2,true);
+  let o=44; for(let i=0;i<n;i++){const s=Math.max(-1,Math.min(1,d[i]));v.setInt16(o,s<0?s*0x8000:s*0x7fff,true);o+=2}
+  return new Blob([ab],{type:'audio/wav'});
+}
+async function decodeBlobTmp(ctx,blob){return await ctx.decodeAudioData(await blob.arrayBuffer())}
+async function mixVoiceMusic(voiceBlob){
+  if(!MUS.on)return null;
+  const C=window.AudioContext||window.webkitAudioContext, OC=window.OfflineAudioContext||window.webkitOfflineAudioContext; if(!C||!OC)return null;
+  const tmp=new C(); const SR=44100;
+  try{
+    const vbuf=await decodeBlobTmp(tmp,voiceBlob); if(vbuf.duration>600)return null;   // for lange tekster: vanlig avspilling
+    const frames=Math.ceil((vbuf.duration+1)*SR); const off=new OC(1,frames,SR);
+    const vs=off.createBufferSource(); vs.buffer=vbuf; const vg=off.createGain(); vg.gain.value=0.85; vs.connect(vg); vg.connect(off.destination); vs.start(0);
+    // musikk
+    let sel=MUS.sel; const mine=MUS.tracks;
+    if(sel!=='ambient'&&sel!=='shuffle'&&!mine.find(t=>t.id===sel))sel='ambient';
+    if(sel==='shuffle'&&!mine.length)sel='ambient';
+    const mg=off.createGain(); mg.gain.value=MUS.vol; mg.connect(off.destination);
+    const total=vbuf.duration+1;
+    if(sel==='ambient'){
+      const lp=off.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=1100; lp.connect(mg);
+      [[73.42,.5],[146.83,.45],[220,.3],[293.66,.22],[369.99,.22],[440,.14],[554.37,.1]].forEach(([f,a],k)=>{
+        const o=off.createOscillator();o.type=k%2?'triangle':'sine';o.frequency.value=f;o.detune.value=(k%3-1)*4;
+        const g=off.createGain();g.gain.value=a*0.5; const lfo=off.createOscillator();lfo.frequency.value=0.05+k*0.017;const lg=off.createGain();lg.gain.value=a*0.35;lfo.connect(lg);lg.connect(g.gain);
+        o.connect(g);g.connect(lp);o.start(0);lfo.start(0);o.stop(total);lfo.stop(total);
+      });
+      mg.gain.value=MUS.vol*1.4;
+    } else {
+      let order=sel==='shuffle'?[...mine].sort(()=>Math.random()-.5):[mine.find(t=>t.id===sel)];
+      let t0=0, guard=0;
+      while(t0<total&&guard++<12){
+        for(const tr of order){
+          if(t0>=total)break;
+          let mb; try{mb=await decodeBlobTmp(tmp,tr.blob)}catch(e){continue}
+          const src=off.createBufferSource(); src.buffer=mb; const g=off.createGain(); src.connect(g); g.connect(mg);
+          const dur=Math.min(mb.duration,total-t0), fade=Math.min(1.5,dur/3);
+          g.gain.setValueAtTime(0,t0); g.gain.linearRampToValueAtTime(1,t0+fade); g.gain.setValueAtTime(1,Math.max(t0+fade,t0+dur-fade)); g.gain.linearRampToValueAtTime(0,t0+dur);
+          src.start(t0,0,dur); t0+=Math.max(0.5,dur-0.5);
+        }
+        if(!order.length)break;
+      }
+    }
+    const out=await off.startRendering();
+    return encodeWav(out);
+  } finally { try{tmp.close()}catch(e){} }
+}
+
+const mStart=()=>{if(!TTS.mixed)MUS.start()};   // musikk er allerede blandet inn i lydfilen når mixed=true
+const mPause=()=>{if(!TTS.mixed)MUS.pause()};
+let remixTimer=null;
+function remixCurrent(){
+  if(TTS.mode!=='audio'||!TTS.voiceBlob||!TTS.el||!TTS.item)return false;
+  clearTimeout(remixTimer);
+  remixTimer=setTimeout(async()=>{
+    const el=TTS.el, my=TTS.tok; TTS.seeking=true;
+    let playBlob=TTS.voiceBlob, mixed=false;
+    if(MUS.on){try{const m=await mixVoiceMusic(TTS.voiceBlob); if(m){playBlob=m;mixed=true}}catch(e){}}
+    if(my!==TTS.tok){TTS.seeking=false;return}
+    const pos=el.currentTime||0, was=TTS.playing;   // posisjon i det øyeblikket filen byttes (lyden går videre mens miksen lages)
+    TTS.mixed=mixed; if(mixed)MUS.stop();
+    const old=TTS.url; TTS.url=URL.createObjectURL(playBlob); el.src=TTS.url; el.playbackRate=TTS.speed*baseRate();
+    el.addEventListener('loadedmetadata',()=>{
+      try{el.currentTime=Math.min(pos,Math.max(0,el.duration-0.2))}catch(e){}
+      if(was){el.play().catch(()=>{}); if(!mixed&&MUS.on)MUS.start()}
+      setTimeout(()=>{TTS.seeking=false},600); uiTick();
+    },{once:true});
+    if(old)URL.revokeObjectURL(old);
+  },450);
+  return true;
+}
 /* iPhone tillater bare lyd som starter i et trykk: lås opp lydelementet med et stille klipp */
 let SILENT=null;
 function silentUrl(){
@@ -163,17 +237,20 @@ function silentUrl(){
 function unlockVoice(){try{const a=voiceEl();if(!a.src||a.src===SILENT||!TTS.item){a.src=silentUrl();a.play().then(()=>{if(a.src===SILENT)a.pause()}).catch(()=>{})}}catch(e){}}
 async function startItem(item,queue,at){
   unlockVoice(); stopVoice(); const my=TTS.tok;
-  TTS.queue=queue||[item]; TTS.qi=Math.max(0,TTS.queue.findIndex(x=>x.id===item.id)); TTS.item=item; TTS.playing=false; TTS.loading=true; TTS.chunks=[]; TTS.i=0; TTS.mode='audio'; TTS.dur=0;
+  TTS.queue=queue||[item]; TTS.qi=Math.max(0,TTS.queue.findIndex(x=>x.id===item.id)); TTS.item=item; TTS.playing=false; TTS.loading=true; TTS.chunks=[]; TTS.i=0; TTS.mode='audio'; TTS.dur=0; TTS.mixed=false; TTS.voiceBlob=null;
   buildPlayer(); showMini(); renderListen(); try{MUS.pause()}catch(e){}
   let parts; try{parts=await item.text()}catch(e){TTS.loading=false;uiTick();return}
   if(my!==TTS.tok)return;
   TTS.lang=item.lang==='en'?'en':lang; TTS.chunks=chunkText(parts);
   let blob=null; try{blob=await getVoiceBlob(parts.join('\n\n'),TTS.lang)}catch(e){blob=null}
   if(my!==TTS.tok)return;
+  TTS.voiceBlob=blob; let playBlob=blob;
+  if(blob&&MUS.on){try{const m=await mixVoiceMusic(blob); if(m){playBlob=m;TTS.mixed=true;MUS.stop()}}catch(e){TTS.mixed=false}}
+  if(my!==TTS.tok)return;
   TTS.loading=false; const f=Math.min(0.98,Math.max(0,at||0));
   if(blob){
-    TTS.mode='audio'; const a=voiceEl(); TTS.url=URL.createObjectURL(blob); a.src=TTS.url; a.playbackRate=TTS.speed*baseRate();
-    const go=()=>{ if(my!==TTS.tok)return; if(f>0&&isFinite(a.duration))a.currentTime=f*a.duration; TTS.playing=true; MUS.start(); a.play().then(()=>uiTick()).catch(()=>{TTS.playing=false;MUS.pause();uiTick()}) };
+    TTS.mode='audio'; const a=voiceEl(); TTS.url=URL.createObjectURL(playBlob); a.src=TTS.url; a.playbackRate=TTS.speed*baseRate();
+    const go=()=>{ if(my!==TTS.tok)return; if(f>0&&isFinite(a.duration))a.currentTime=f*a.duration; TTS.playing=true; mStart(); a.play().then(()=>uiTick()).catch(()=>{TTS.playing=false;mPause();uiTick()}) };
     if(a.readyState>=1)go(); else a.addEventListener('loadedmetadata',go,{once:true});
   } else {
     TTS.mode='device'; TTS.i=Math.floor(f*TTS.chunks.length); TTS.playing=true; MUS.start(); speakChunk();
@@ -182,11 +259,11 @@ async function startItem(item,queue,at){
 }
 function pauseTTS(){
   if(TTS.mode==='audio'&&TTS.el){TTS.playing=false;TTS.el.pause()} else {TTS.playing=false;TTS.tok++;try{speechSynthesis.cancel()}catch(e){}}
-  MUS.pause(); saveResume(true); uiTick();
+  mPause(); saveResume(true); uiTick();
 }
 function resumeTTS(){
-  if(!TTS.item||TTS.loading)return; TTS.playing=true; MUS.start();
-  if(TTS.mode==='audio'&&TTS.el){TTS.el.playbackRate=TTS.speed*baseRate();TTS.el.play().then(()=>uiTick()).catch(()=>{TTS.playing=false;MUS.pause();uiTick()})} else speakChunk();
+  if(!TTS.item||TTS.loading)return; TTS.playing=true; mStart();
+  if(TTS.mode==='audio'&&TTS.el){TTS.el.playbackRate=TTS.speed*baseRate();TTS.el.play().then(()=>uiTick()).catch(()=>{TTS.playing=false;mPause();uiTick()})} else speakChunk();
   uiTick();
 }
 function toggleTTS(){TTS.playing?pauseTTS():resumeTTS()}
@@ -205,7 +282,7 @@ function skip(sec){
   TTS.i=i; saveResume(true); if(TTS.playing)speakChunk();else uiTick();
 }
 function finishItem(){
-  TTS.playing=false; MUS.pause(); store.set('cf_resume',JSON.stringify({id:TTS.item.id,f:0}));
+  TTS.playing=false; mPause(); store.set('cf_resume',JSON.stringify({id:TTS.item.id,f:0}));
   const nxt=TTS.queue[TTS.qi+1]; if(nxt){startItem(nxt,TTS.queue,0)}else{uiTick();renderListen()}
 }
 function nextItem(){const n=TTS.queue[TTS.qi+1];if(n){startItem(n,TTS.queue,0)}}
@@ -285,7 +362,7 @@ const MUS={
     for(const f of files){const id='m'+Date.now()+Math.random().toString(36).slice(2,6);const name=f.name.replace(/\.[^.]+$/,'');await IDB.put({id,name,blob:f});}
     await this.load(); buildMusicPanel();
   },
-  async remove(id){await IDB.del(id);if(this.sel===id)this.sel='ambient';await this.load();this.save();if(this.running)this.start();buildMusicPanel()}
+  async remove(id){await IDB.del(id);if(this.sel===id)this.sel='ambient';await this.load();this.save();if(!remixCurrent()&&this.running)this.start();buildMusicPanel()}
 };
 MUS.load();
 
@@ -357,6 +434,7 @@ function openPlayer(){if(!TTS.item)return;buildPlayer();requestAnimationFrame(()
 function closePlayer(){const p=$('#player');if(p)p.classList.remove('open')}
 function uiTick(){
   const it=TTS.item; if(!it)return; const fr=curFrac(), pct=fr*100, t=LN[lang];
+  try{if('mediaSession' in navigator)navigator.mediaSession.playbackState=TTS.playing?'playing':'paused'}catch(e){}
   const m=$('#mini'); if(m){m.querySelector('.t').textContent=it.title;m.querySelector('.pb').textContent=TTS.loading?'…':(TTS.playing?'❚❚':'▶');m.querySelector('.pr').style.width=pct+'%'}
   const pl=$('#pPlay'); if(pl){
     pl.textContent=TTS.loading?'…':(TTS.playing?'❚❚':'▶'); $('#pLine').textContent=TTS.loading?t.loadingAudio:lineAt(); $('#pSpd').textContent=TTS.speed+'×'; $('#pArt').classList.toggle('pulse',TTS.playing);
@@ -387,14 +465,14 @@ function fillMusic(box){
   });
   box.appendChild(mk('div','mnote',t.vhint));
   // Musikk
-  const h=mk('div','h'); h.style.marginTop='16px'; h.appendChild(mk('span','',t.music)); const sw=mk('div','sw'+(MUS.on?' on':'')); sw.onclick=()=>{MUS.on=!MUS.on;MUS.save();if(MUS.on&&TTS.playing)MUS.start();else MUS.stop();buildMusicPanel()}; h.appendChild(sw); box.appendChild(h);
+  const h=mk('div','h'); h.style.marginTop='16px'; h.appendChild(mk('span','',t.music)); const sw=mk('div','sw'+(MUS.on?' on':'')); sw.onclick=()=>{MUS.on=!MUS.on;MUS.save();if(!remixCurrent()){if(MUS.on&&TTS.playing)MUS.start();else MUS.stop()}buildMusicPanel()}; h.appendChild(sw); box.appendChild(h);
   const chips=mk('div','chips');
-  const chip=(label,val)=>{const b=mk('button',MUS.sel===val?'on':'',label);b.onclick=()=>{MUS.sel=val;store.set('cf_msel_user','1');MUS.save();if(TTS.playing&&MUS.on){MUS.stop();MUS.start()}buildMusicPanel()};return b};
+  const chip=(label,val)=>{const b=mk('button',MUS.sel===val?'on':'',label);b.onclick=()=>{MUS.sel=val;store.set('cf_msel_user','1');MUS.save();if(!remixCurrent()){if(TTS.playing&&MUS.on){MUS.stop();MUS.start()}}buildMusicPanel()};return b};
   chips.appendChild(chip(t.ambient,'ambient'));
   MUS.tracks.forEach(tr=>{chips.appendChild(chip(tr.name,tr.id))});
   if(MUS.tracks.length>1)chips.appendChild(chip(t.shuffle,'shuffle'));
   box.appendChild(chips);
-  const v=mk('div','vol'); v.appendChild(mk('span','',t.vol)); const rg=mk('input'); rg.type='range'; rg.min='0'; rg.max='0.6'; rg.step='0.02'; rg.value=MUS.vol; rg.oninput=()=>MUS.setVol(+rg.value); v.appendChild(rg); box.appendChild(v);
+  const v=mk('div','vol'); v.appendChild(mk('span','',t.vol)); const rg=mk('input'); rg.type='range'; rg.min='0'; rg.max='0.6'; rg.step='0.02'; rg.value=MUS.vol; rg.oninput=()=>MUS.setVol(+rg.value); rg.onchange=()=>remixCurrent(); v.appendChild(rg); box.appendChild(v);
   MUS.tracks.forEach(tr=>{ if(MUS.sel===tr.id){const d=mk('button','addm','✕ '+tr.name);d.style.borderStyle='solid';d.style.borderColor='var(--line)';d.style.color='#C0392B';d.onclick=()=>MUS.remove(tr.id);box.appendChild(d)} });
   const add=mk('label','addm',t.addm); const fi=mk('input'); fi.type='file'; fi.accept='audio/*,video/*'; fi.multiple=true; fi.style.display='none'; fi.onchange=()=>{if(fi.files.length)MUS.add([...fi.files])}; add.appendChild(fi); box.appendChild(add);
   box.appendChild(mk('div','mnote',t.mnote));
