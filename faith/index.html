@@ -310,7 +310,7 @@ body.chatting nav.tabs{display:none}
 
     <!-- Listen -->
     <section class="view" id="view-listen">
-      <div class="reveal"><div class="empty"><h1 id="lTitle"></h1><p id="lText"></p></div></div>
+      <div class="reveal"><div id="listenRoot"></div></div>
     </section>
 
     <!-- Read -->
@@ -338,6 +338,7 @@ body.chatting nav.tabs{display:none}
   </main>
 </div>
 
+<link rel="stylesheet" href="listen.css">
 <script src="guides.js"></script>
 <script>
 /* ---------- Tekster (norsk/engelsk) ---------- */
@@ -629,7 +630,7 @@ function render(){
   $('#tjTitle').textContent=t.journey; $('#tjSub').textContent=t.day+' '+(lesson+1)+' · '+t.lessons[lesson];
   $('#chatTitle').textContent=t.chat;
   $('#tHome').textContent=t.home;$('#tListen').textContent=t.listen;$('#tRead').textContent=t.read;
-  $('#lTitle').textContent=t.lT;$('#lText').textContent=t.lX;renderRead();renderGuideList();if($('#view-guide').classList.contains('active'))renderGuide();chatChrome();if($('#view-chat').classList.contains('active'))drawChat();
+  if(typeof renderListen==='function'){renderListen();if(TTS.item&&$('#player'))buildPlayer()}renderRead();renderGuideList();if($('#view-guide').classList.contains('active'))renderGuide();chatChrome();if($('#view-chat').classList.contains('active'))drawChat();
   $$('.lang button').forEach(b=>b.classList.toggle('on',b.dataset.lang===lang));
   // uke
   const dow=today.getDay(), done=store.get('cf_done','');
@@ -664,5 +665,6 @@ $$('nav.tabs button').forEach(b=>b.addEventListener('click',()=>{
 }));
 render();
 </script>
+<script src="listen.js"></script>
 </body>
 </html>
