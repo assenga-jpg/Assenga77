@@ -23,7 +23,7 @@ async function getDaily(type){
   const date=dateLocal(), key=type+'|'+date+'|'+lang, st=genStore();
   if(st[key])return {ok:true,e:st[key]};
   const n=dayN(); const payload={daily:type,lang,date};
-  if(type==='story'){const ref=STORY_REFS[((n%STORY_REFS.length)+STORY_REFS.length)%STORY_REFS.length];payload.ref=ref;payload.passage=(await refText(ref)).join(' ')}
+  if(type==='story'){const ref=STORY_REFS[((n%STORY_REFS.length)+STORY_REFS.length)%STORY_REFS.length];payload.ref=ref;payload.passage=(await refText(ref,true)).join(' ')}
   else payload.topic=LESSON_TOPICS[((n%LESSON_TOPICS.length)+LESSON_TOPICS.length)%LESSON_TOPICS.length];
   try{
     const r=await fetch(WORKER_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});

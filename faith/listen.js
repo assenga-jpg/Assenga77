@@ -1,7 +1,7 @@
 /* ---------- LYTT: opplesning (stemme på enheten), spiller og bakgrunnsmusikk ---------- */
 const LN={
  no:{title:"Lytt",lead:"Bibelen, guider og historier. Lytt rolig, også i bilen.",today:"Dagens leksjon",resume:"Fortsett der du slapp",
-     tabs:{bible:"Bibel",guides:"Guider",stories:"Historier",favs:"Favoritter"},engNote:"Engelsk tekst",min:"min",
+     tabs:{bible:"Bibel",guides:"Guider",stories:"Historier",favs:"Favoritter"},engNote:"Engelsk tekst",aiTr:"AI-oversatt",min:"min",
      noFav:"Ingen favoritter ennå. Trykk på hjertet ved noe du vil lagre.",ep:"Del",
      speed:"Hastighet",music:"Bakgrunnsmusikk",ambient:"Rolig ambient",shuffle:"Tilfeldig",addm:"+ Legg til egen musikk",
      mnote:"Musikken du legger til lagres bare på denne enheten og lastes aldri opp. Du kan velge lydfiler eller videoer, og appen spiller bare lyden.",
@@ -11,7 +11,7 @@ const LN={
      vhint:"Tips: på iPhone kan du laste ned bedre stemmer under Innstillinger › Tilgjengelighet › Opplest innhold › Stemmer. Velg for eksempel engelsk (Storbritannia) og en utvidet eller premium-stemme. Den dukker opp i listen her.",
      stories:["Natten i Betlehem","Veien til Damaskus","Den barmhjertige samaritan"]},
  en:{title:"Listen",lead:"The Bible, guides and stories. Listen calmly, even in the car.",today:"Today's lesson",resume:"Continue where you left off",
-     tabs:{bible:"Bible",guides:"Guides",stories:"Stories",favs:"Favorites"},engNote:"English text",min:"min",
+     tabs:{bible:"Bible",guides:"Guides",stories:"Stories",favs:"Favorites"},engNote:"English text",aiTr:"AI-translated",min:"min",
      noFav:"No favorites yet. Tap the heart on anything you want to keep.",ep:"Part",
      speed:"Speed",music:"Background music",ambient:"Calm ambient",shuffle:"Shuffle",addm:"+ Add your own music",
      mnote:"Music you add is stored only on this device and is never uploaded. You can pick audio files or videos; the app plays just the sound.",
@@ -54,20 +54,21 @@ const toggleFav=id=>{let f=favs();f=f.includes(id)?f.filter(x=>x!==id):[...f,id]
 function allItems(){
   const t=LN[lang], out={bible:[],guides:[],stories:[]};
   READINGS.forEach(r=>{
-    const nbOK=lang==='no'&&findBook(r.ref.split(' ')[0])>=47;
-    const it={id:r.id,kind:'bible',title:r[lang],sub:nbOK?r.ref:(lang==='no'?t.engNote+' · ':'')+r.ref,lang:nbOK?'app':'en'};
-    it.text=async()=>{const L=await refTextL(r.ref); it.lang=L.tr==='nb'?'app':'en'; return [r[L.tr==='nb'?'no':'en'],...L.parts]};
+    const isNT=findBook(r.ref.split(' ')[0])>=47;
+    const it={id:r.id,kind:'bible',title:r[lang],sub:lang==='no'?(isNT?r.ref:r.ref+' · '+t.aiTr):r.ref,lang:lang==='no'?'app':'en'};
+    it.text=async()=>{const L=await refTextL(r.ref); const no=(L.tr==='nb'||L.tr==='ai'); it.lang=no?'app':'en'; return [r[no?'no':'en'],...L.parts]};
     out.bible.push(it);
   });
   GUIDES.forEach((G,gi)=>G.L.forEach((L,li)=>out.guides.push({id:'gd-'+gi+'-'+li,kind:'guides',series:G[lang],title:L[lang][0],sub:G[lang]+' · '+t.ep+' '+(li+1),lang:'app',text:()=>Promise.resolve(L[lang])})));
   STORIES.forEach((S,i)=>out.stories.push({id:S.id,kind:'stories',title:t.stories[i],sub:S.ref,lang:'app',text:()=>Promise.resolve(S[lang])}));
   return out;
 }
-async function refTextL(ref){
+async function refTextL(ref,forceEn){
   const m=ref.match(/^\s*([1-3]?[A-Za-zÆØÅæøå]+)\s+(\d+):(\d+)-(\d+)\s*$/); const id=findBook(m[1]);
-  const P=await passage(id,+m[2],+m[3],+m[4]); return {parts:P.vs,tr:P.tr};
+  const P=await passage(id,+m[2],+m[3],+m[4],forceEn); return {parts:P.vs,tr:P.tr};
 }
-const refText=async ref=>(await refTextL(ref)).parts;
+const refText=async(ref,en)=>(await refTextL(ref,en)).parts;
+function resetPlayer(){try{pauseTTS()}catch(e){} TTS.item=null;TTS.chunks=[];TTS.i=0;TTS.queue=[];try{MUS.stop()}catch(e){} const m=$('#mini');if(m){m.classList.remove('show');const tt=m.querySelector('.t');if(tt)tt.textContent=''}const p=$('#player');if(p)p.remove()}
 function chunkText(parts){
   const out=[];
   parts.forEach(p=>{

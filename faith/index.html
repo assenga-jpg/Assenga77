@@ -404,12 +404,12 @@ const R={
      chapter:"Kapittel",chapters:"kapitler",back:"‹ Alle bøker",prev:"‹ Forrige",next:"Neste ›",copy:"Kopier",share:"Del",copied:"Vers kopiert",
      none:"Ingen bøker funnet",fail:"Kunne ikke laste teksten. Sjekk nettet og prøv igjen.",loading:"Laster …",deu:"Deuterokanonisk bok",
      src:"Les også Legacy Standard Bible (LSB):",psalm:"Merk: Salmene er nummerert etter Vulgata (Douay), så tallene kan avvike litt fra protestantiske bibler.",psalmWeb:"Merk: i denne oversettelsen er Salmene nummerert etter hebraisk tekst, så tallene avviker litt fra Vulgata.",
-     trl:"Oversettelse",nbnote:"Gratis norsk tekst finnes bare for Det nye testamente. Det gamle testamente vises på engelsk.",fallback:"Engelsk tekst: norsk finnes bare for Det nye testamente.",tapv:"Trykk på et vers for å kopiere eller dele"},
+     trl:"Oversettelse",nbnote:"Det nye testamente er En Levende Bok. Det gamle testamente er AI-oversatt fra engelsk og kan avvike. Velg Douay-Rheims for originalen.",fallback:"Kunne ikke oversette akkurat nå, viser engelsk tekst.",transl:"Oversetter til norsk …",tapv:"Trykk på et vers for å kopiere eller dele"},
  en:{title:"Read",lead:"The Bible with all 73 books",ot:"Old",nt:"New",search:"Search for a book …",resume:"Continue reading",
      chapter:"Chapter",chapters:"chapters",back:"‹ All books",prev:"‹ Previous",next:"Next ›",copy:"Copy",share:"Share",copied:"Verse copied",
      none:"No books found",fail:"Could not load the text. Check your connection and try again.",loading:"Loading …",deu:"Deuterocanonical book",
      src:"Read the Legacy Standard Bible (LSB) too:",psalm:"Note: the Psalms follow Vulgate (Douay) numbering, so numbers can differ slightly from Protestant Bibles.",psalmWeb:"Note: in this translation the Psalms follow the Hebrew numbering, so numbers differ slightly from the Vulgate.",
-     trl:"Translation",nbnote:"Free Norwegian text exists only for the New Testament.",fallback:"English text: Norwegian is only available for the New Testament.",tapv:"Tap a verse to copy or share"}
+     trl:"Translation",nbnote:"Free Norwegian text exists only for the New Testament.",fallback:"Could not translate right now, showing English text.",transl:"Translating …",tapv:"Tap a verse to copy or share"}
 };
 const DEU_BOOKS=new Set([17,18,25,26,30,45,46]); // Tobit, Judit, Visdom, Sirak, Baruk, 1-2 Makkabeer
 let BIDX=null, BCACHE={}, rs={mode:'books',nt:0,q:'',book:0,ch:0}, sel=new Set();
@@ -433,9 +433,9 @@ async function loadDayVerse(){
 }
 fetch('bible/index.json').then(r=>r.json()).then(j=>{BIDX=j;renderRead();loadDayVerse();if(typeof renderListen==='function')renderListen()}).catch(()=>{});
 const TRS={drc:{dir:'bible'},web:{dir:'bible-web'},nb:{dir:'bible-nb'}};
-const TRN={no:{drc:"Douay-Rheims (Challoner), fri engelsk tekst",web:"World English Bible, katolsk utgave, fri moderne engelsk tekst",nb:"En Levende Bok (Biblica Open, CC BY-SA), en norsk tankeoversettelse, ikke ordrett"},
- en:{drc:"Douay-Rheims (Challoner), public-domain English",web:"World English Bible, Catholic edition, public-domain modern English",nb:"En Levende Bok (Biblica Open, CC BY-SA), a Norwegian thought-for-thought translation"}};
-const TRS_SHORT={drc:'Douay-Rheims',web:'WEB',nb:'Levende Bok'};
+const TRN={no:{drc:"Douay-Rheims (Challoner), fri engelsk tekst",web:"World English Bible, katolsk utgave, fri moderne engelsk tekst",nb:"En Levende Bok (Biblica Open, CC BY-SA), en norsk tankeoversettelse, ikke ordrett",ai:"AI-oversatt fra Douay-Rheims til norsk. Kan avvike fra godkjente norske bibler. Velg Douay-Rheims for den engelske originalen."},
+ en:{drc:"Douay-Rheims (Challoner), public-domain English",web:"World English Bible, Catholic edition, public-domain modern English",nb:"En Levende Bok (Biblica Open, CC BY-SA), a Norwegian thought-for-thought translation",ai:""}};
+const TRS_SHORT={drc:'Douay-Rheims',web:'WEB',nb:'Levende Bok',ai:'AI-norsk'};
 const rtrPref=()=>store.get('cf_rtr_'+lang,lang==='no'?'nb':'drc');
 const effTr=(tr,id)=>(tr==='nb'&&id<47)?'drc':tr;   // Det gamle testamente finnes ikke gratis på norsk
 async function loadBookT(tr,id){
@@ -445,9 +445,36 @@ async function loadBookT(tr,id){
 }
 async function loadBook(id){return (await loadBookT('drc',id)).data}   // Douay-Rheims
 async function loadBookL(id){try{return await loadBookT(lang==='no'?'nb':'drc',id)}catch(e){return await loadBookT('drc',id)}}   // tekst på brukerens språk
-/* verstekst på brukerens språk, med reserve fra Douay-Rheims når et vers mangler */
-async function passage(id,ch,v1,v2){
-  const L=await loadBookL(id); let vs=(L.data[ch-1]||[]).slice(v1-1,v2); let tr=L.tr;
+/* AI-oversettelse av Det gamle testamente til norsk (Douay-Rheims -> bokmål), lagret lokalt og på serveren */
+const KV={db:null,
+  open(){return this.db?Promise.resolve(this.db):new Promise((res,rej)=>{const r=indexedDB.open('cf_kv',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>{this.db=r.result;res(r.result)};r.onerror=()=>rej(r.error)})},
+  async get(k){try{const d=await this.open();return await new Promise(res=>{const q=d.transaction('kv').objectStore('kv').get(k);q.onsuccess=()=>res(q.result);q.onerror=()=>res(undefined)})}catch(e){return undefined}},
+  async set(k,v){try{const d=await this.open();return await new Promise(res=>{const q=d.transaction('kv','readwrite').objectStore('kv').put(v,k);q.onsuccess=()=>res();q.onerror=()=>res()})}catch(e){}}
+};
+const fnv=str=>{let h=2166136261;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)}return (h>>>0).toString(36)+str.length};
+const AIMEM={};
+async function aiNoOne(texts){
+  const key='tr2|'+fnv(texts.join('\u0001')); if(AIMEM[key])return AIMEM[key];
+  const c=await KV.get(key); if(c&&c.length===texts.length){AIMEM[key]=c;return c}
+  const r=await fetch(WORKER_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({translate:1,texts})});
+  if(!r.ok)throw new Error('tr '+r.status); const j=await r.json(); if(!Array.isArray(j.out)||j.out.length!==texts.length)throw new Error('tr bad');
+  AIMEM[key]=j.out; KV.set(key,j.out); return j.out;
+}
+async function aiNo(texts,onPart){
+  // deler opp i grupper (maks 30 vers / 6000 tegn), returnerer null hvis noe feiler
+  const groups=[]; let g=[],len=0; texts.forEach(t=>{if(g.length>=30||len+t.length>6000){groups.push(g);g=[];len=0}g.push(t);len+=t.length}); if(g.length)groups.push(g);
+  const out=[];
+  try{for(const gr of groups){const part=await aiNoOne(gr); out.push(...part); if(onPart)onPart(out.slice())}}catch(e){return null}
+  return out;
+}
+/* verstekst på brukerens språk (norsk: NT = Levende Bok, GT = AI-norsk), med reserve fra Douay-Rheims */
+async function passage(id,ch,v1,v2,forceEn){
+  if(!forceEn&&lang==='no'&&id<47){
+    const D=await loadBookT('drc',id); const vs=(D.data[ch-1]||[]).slice(v1-1,v2);
+    if(!vs.length)return {vs:[],tr:'drc'};
+    const t=await aiNo(vs); return t?{vs:t,tr:'ai'}:{vs,tr:'drc'};
+  }
+  const L=forceEn?await loadBookT('drc',id):await loadBookL(id); let vs=(L.data[ch-1]||[]).slice(v1-1,v2); let tr=L.tr;
   if(!vs.some(Boolean)){ if(tr!=='drc'){const D=await loadBookT('drc',id); vs=(D.data[ch-1]||[]).slice(v1-1,v2); tr='drc'} }
   return {vs:vs.filter(Boolean),tr};
 }
@@ -489,7 +516,7 @@ function renderRead(){
     const g=mk('div','chs'); wrap.appendChild(g);
     loadBookT(pref,b.id).then(({data,tr})=>{
       if(rs.mode!=='chapters'||rs.book!==b.id)return;
-      lead.textContent=data.length+' '+t.chapters+(DEU_BOOKS.has(b.id)?' · '+t.deu:'')+' · '+TRS_SHORT[tr]+(tr!==pref?' ('+t.fallback+')':'');
+      const aiOT=(lang==='no'&&pref==='nb'&&b.id<47); lead.textContent=data.length+' '+t.chapters+(DEU_BOOKS.has(b.id)?' · '+t.deu:'')+' · '+(aiOT?TRS_SHORT.ai:TRS_SHORT[tr]);
       for(let i=1;i<=data.length;i++){const e=mk('button','',String(i));e.onclick=()=>openChapter(b.id,i);g.appendChild(e)}
     }).catch(()=>{lead.textContent=t.fail});
   } else {
@@ -503,16 +530,23 @@ function renderRead(){
     const nav=mk('div','chnav'); const pv=mk('button','',t.prev), nx=mk('button','',t.next); pv.disabled=true; nx.disabled=true;
     pv.onclick=()=>stepChapter(-1); nx.onclick=()=>stepChapter(1); nav.appendChild(pv); nav.appendChild(nx); wrap.appendChild(nav);
     const foot=mk('div'); wrap.appendChild(foot);
-    loadBookT(pref,b.id).then(({data,tr})=>{
+    loadBookT(pref,b.id).then(async({data,tr})=>{
       if(rs.mode!=='text'||rs.book!==b.id)return;
-      if(rs.ch>data.length)rs.ch=data.length; if(rs.ch<1)rs.ch=1; h1.textContent=bname(b)+' '+rs.ch; RCUR={data,tr,id:b.id,ch:rs.ch}; box.innerHTML='';
-      const p=mk('p'); data[rs.ch-1].forEach((v,i)=>{ if(!v)return; const s=mk('span','v'); s.dataset.n=i+1; s.appendChild(mk('sup','',String(i+1))); s.appendChild(document.createTextNode(v+' ')); p.appendChild(s)});
+      if(rs.ch>data.length)rs.ch=data.length; if(rs.ch<1)rs.ch=1; h1.textContent=bname(b)+' '+rs.ch;
+      let verses=data[rs.ch-1], shownTr=tr, failed=false; const myCh=rs.ch;
+      if(lang==='no'&&pref==='nb'&&b.id<47){
+        box.innerHTML=''; box.appendChild(mk('div','lead',t.transl));
+        const tt=await aiNo(verses.filter(Boolean)); if(rs.mode!=='text'||rs.book!==b.id||rs.ch!==myCh)return;
+        if(tt){let k=0; verses=verses.map(v=>v?tt[k++]:''); shownTr='ai'} else failed=true;
+      }
+      RCUR={data:data.map((c,i)=>i===myCh-1?verses:c),tr:shownTr,id:b.id,ch:myCh}; box.innerHTML='';
+      const p=mk('p'); verses.forEach((v,i)=>{ if(!v)return; const s=mk('span','v'); s.dataset.n=i+1; s.appendChild(mk('sup','',String(i+1))); s.appendChild(document.createTextNode(v+' ')); p.appendChild(s)});
       box.appendChild(p);
       box.onclick=e=>{const v=e.target.closest('.v'); if(!v)return; const n=+v.dataset.n; sel.has(n)?sel.delete(n):sel.add(n); v.classList.toggle('sel',sel.has(n)); $('#selbar').classList.toggle('show',sel.size>0)};
       pv.disabled=(b.id===1&&rs.ch===1); nx.disabled=(b.id===73&&rs.ch>=data.length);
-      if(tr!==pref)foot.appendChild(mk('div','src',t.fallback));
-      if(b.id===21)foot.appendChild(mk('div','src',tr==='web'?t.psalmWeb:t.psalm));
-      const src=mk('div','src',TRN[lang][tr]+'. '+t.src+' '); const a=mk('a','','lsbible.org'); a.href='https://read.lsbible.org/'; a.target='_blank'; a.rel='noopener'; src.appendChild(a); foot.appendChild(src);
+      if(failed)foot.appendChild(mk('div','src',t.fallback));
+      if(b.id===21)foot.appendChild(mk('div','src',shownTr==='web'?t.psalmWeb:t.psalm));
+      const src=mk('div','src',(TRN[lang][shownTr]||TRN[lang][tr])+'. '+t.src+' '); const a=mk('a','','lsbible.org'); a.href='https://read.lsbible.org/'; a.target='_blank'; a.rel='noopener'; src.appendChild(a); foot.appendChild(src);
     }).catch(()=>{box.innerHTML='';box.appendChild(mk('div','lead',t.fail))});
   }
 }
@@ -556,9 +590,12 @@ function findBook(name){
   const n=norm(name); let i=ABBR.findIndex(a=>norm(a)===n); if(i>=0)return i+1;
   const b=BIDX&&BIDX.find(b=>norm(b.no)===n||norm(b.en)===n||norm(bname(b))===n); return b?b.id:0;
 }
-let chat={mode:'explain',msgs:[],busy:false};
-try{const s=JSON.parse(store.get('cf_chat','null')); if(s&&Array.isArray(s.msgs)){chat.msgs=s.msgs.slice(-20);if(s.mode)chat.mode=s.mode}}catch(e){}
-const saveChat=()=>store.set('cf_chat',JSON.stringify({mode:chat.mode,msgs:chat.msgs.slice(-20)}));
+let chat={mode:'explain',msgs:[],busy:false,_l:null};
+const chatLoad=l=>{try{const s=JSON.parse(store.get('cf_chat_'+l,'null')); return s&&Array.isArray(s.msgs)?s.msgs.slice(-20):[]}catch(e){return []}};
+try{const m=store.get('cf_chatmode','explain'); if(['explain','apologetics','study'].includes(m))chat.mode=m}catch(e){}
+const saveChat=()=>{store.set('cf_chat_'+(chat._l||lang),JSON.stringify({msgs:chat.msgs.slice(-20)}));store.set('cf_chatmode',chat.mode)};
+function chatSync(){ if(chat._l===lang)return; if(chat._l)saveChat(); chat._l=lang; chat.msgs=chatLoad(lang) }
+chatSync();
 async function verseCard(ref){
   const m=ref.match(/^\s*([1-3]?\s?[A-Za-zÆØÅæøå.]+(?:\s[A-Za-zÆØÅæøå.]+)?)\s+(\d+)(?::(\d+)(?:\s?[-–]\s?(\d+))?)?\s*$/);
   const card=mk('div','vc'); const t=CH[lang];
@@ -677,6 +714,7 @@ function renderGuideList(){
 
 /* Tekster og innhold */
 function render(){
+  chatSync(); if(window._lastLang&&window._lastLang!==lang&&typeof resetPlayer==='function')resetPlayer(); window._lastLang=lang;
   const t=T[lang]; document.documentElement.lang=lang; DV_CUR=null; if(typeof loadDayVerse==='function')setTimeout(loadDayVerse,0);
   const et=$('#enterText'); if(et) et.textContent=isTouch?t.enterTouch:t.enter;
   $('#tag').textContent=t.tag; $('#vMeta').textContent=t.daily+' · '+today.toLocaleDateString(lang==='no'?'nb-NO':'en-GB',{day:'numeric',month:'long'});
