@@ -6,7 +6,7 @@ const LN={
      speed:"Hastighet",music:"Bakgrunnsmusikk",ambient:"Rolig ambient",shuffle:"Tilfeldig",addm:"+ Legg til egen musikk",
      mnote:"Musikken du legger til lagres bare på denne enheten og lastes aldri opp. Du kan velge lydfiler eller videoer, og appen spiller bare lyden.",
      vol:"Volum",next:"Neste",fav:"Favoritt",nov:"Fant ingen stemme på denne enheten for dette språket. Lyden bruker enhetens standardstemme.",nowp:"Spiller nå",
-     audio:"Lyd og musikk",audioSub:"Legg til din egen musikk, velg stemme",voice:"Stemme",vEn:"Engelsk stemme",vNo:"Norsk stemme",auto:"Automatisk",try:"Prøv",
+     audio:"Lyd og musikk",audioSub:"Legg til din egen musikk, velg stemme",loadingAudio:"Lager lyd …",voice:"Stemme",vEn:"Engelsk stemme",vNo:"Norsk stemme",auto:"Automatisk",try:"Prøv",
      tryEn:"The Lord is my shepherd; I shall not want.",tryNo:"Herren er min hyrde, jeg mangler ingenting.",
      vhint:"Tips: på iPhone kan du laste ned bedre stemmer under Innstillinger › Tilgjengelighet › Opplest innhold › Stemmer. Velg for eksempel engelsk (Storbritannia) og en utvidet eller premium-stemme. Den dukker opp i listen her.",
      stories:["Natten i Betlehem","Veien til Damaskus","Den barmhjertige samaritan"]},
@@ -16,7 +16,7 @@ const LN={
      speed:"Speed",music:"Background music",ambient:"Calm ambient",shuffle:"Shuffle",addm:"+ Add your own music",
      mnote:"Music you add is stored only on this device and is never uploaded. You can pick audio files or videos; the app plays just the sound.",
      vol:"Volume",next:"Next",fav:"Favorite",nov:"No voice found on this device for this language. Audio uses the device's default voice.",nowp:"Now playing",
-     audio:"Audio and music",audioSub:"Add your own music, choose a voice",voice:"Voice",vEn:"English voice",vNo:"Norwegian voice",auto:"Automatic",try:"Try",
+     audio:"Audio and music",audioSub:"Add your own music, choose a voice",loadingAudio:"Preparing audio …",voice:"Voice",vEn:"English voice",vNo:"Norwegian voice",auto:"Automatic",try:"Try",
      tryEn:"The Lord is my shepherd; I shall not want.",tryNo:"Herren er min hyrde, jeg mangler ingenting.",
      vhint:"Tip: on iPhone you can download better voices under Settings › Accessibility › Spoken Content › Voices. Pick for example English (UK) and an enhanced or premium voice. It will show up in the list here.",
      stories:["The night in Bethlehem","The road to Damascus","The Good Samaritan"]}
@@ -68,7 +68,7 @@ async function refTextL(ref,forceEn){
   const P=await passage(id,+m[2],+m[3],+m[4],forceEn); return {parts:P.vs,tr:P.tr};
 }
 const refText=async(ref,en)=>(await refTextL(ref,en)).parts;
-function resetPlayer(){try{pauseTTS()}catch(e){} TTS.item=null;TTS.chunks=[];TTS.i=0;TTS.queue=[];try{MUS.stop()}catch(e){} const m=$('#mini');if(m){m.classList.remove('show');const tt=m.querySelector('.t');if(tt)tt.textContent=''}const p=$('#player');if(p)p.remove()}
+function resetPlayer(){try{pauseTTS()}catch(e){} try{stopVoice()}catch(e){} TTS.item=null;TTS.chunks=[];TTS.i=0;TTS.queue=[];TTS.loading=false;try{MUS.stop()}catch(e){} const m=$('#mini');if(m){m.classList.remove('show');const tt=m.querySelector('.t');if(tt)tt.textContent=''}const p=$('#player');if(p)p.remove()}
 function chunkText(parts){
   const out=[];
   parts.forEach(p=>{
@@ -85,8 +85,8 @@ function chunkText(parts){
   return out;
 }
 
-/* ---------- Stemme ---------- */
-const TTS={chunks:[],i:0,playing:false,speed:+store.get('cf_speed','1'),item:null,queue:[],qi:0,lang:'en',tok:0,timer:null};
+/* ---------- Stemme: ekte lydfil fra serveren (AI-stemme), reserve = enhetens stemme ---------- */
+const TTS={chunks:[],i:0,playing:false,loading:false,speed:+store.get('cf_speed','1'),item:null,queue:[],qi:0,lang:'en',tok:0,mode:'device',el:null,dur:0,drag:false,lastSave:0};
 function pickVoice(l){
   const vs=speechSynthesis.getVoices(); if(!vs.length)return null;
   const saved=store.get('cf_voice_'+(l==='en'?'en':'no'),''); if(saved){const sv=vs.find(v=>v.name===saved);if(sv)return sv}
@@ -97,10 +97,49 @@ function pickVoice(l){
   const no=vs.filter(v=>/^(nb|no|nn)/i.test(v.lang));
   return no.find(v=>/henrik|finn|male|mann/i.test(v.name))||no[0]||null;
 }
+/* tid og fremdrift (like for lydfil og enhetsstemme) */
+const baseRate=()=>TTS.lang==='en'?0.8:1;   // AI-stemmen leser fort, så vi tar den litt roligere
 function wordsPerSec(){return 2.3*TTS.speed}
 function secsOf(i0,i1){let w=0;for(let k=i0;k<i1&&k<TTS.chunks.length;k++)w+=TTS.chunks[k].split(/\s+/).length;return w/wordsPerSec()}
+function curPos(){return TTS.mode==='audio'&&TTS.el?(TTS.el.currentTime||0):secsOf(0,TTS.i)}
+function curDur(){return TTS.mode==='audio'&&TTS.el&&isFinite(TTS.el.duration)?TTS.el.duration:secsOf(0,TTS.chunks.length)}
+function curFrac(){const d=curDur();return d>0?Math.min(1,curPos()/d):0}
+function fmtT(s){s=Math.max(0,Math.round(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+function lineAt(){
+  if(!TTS.chunks.length)return '';
+  if(TTS.mode!=='audio')return TTS.chunks[TTS.i]||'';
+  const tot=TTS.chunks.reduce((a,c)=>a+c.length,0), f=curFrac()*tot; let acc=0;
+  for(const c of TTS.chunks){acc+=c.length;if(f<=acc)return c}
+  return TTS.chunks[TTS.chunks.length-1];
+}
+function saveResume(force){
+  if(!TTS.item)return; const now=Date.now(); if(!force&&now-TTS.lastSave<2000)return; TTS.lastSave=now;
+  store.set('cf_resume',JSON.stringify({id:TTS.item.id,f:Math.round(curFrac()*1000)/1000}));
+}
+/* hent talen som lydfil (lagret på enheten etter første gang) */
+async function getVoiceBlob(text,l){
+  const key='tts2|'+l+'|'+fnv(text); const c=await KV.get(key); if(c&&c.size>500)return c;
+  const r=await fetch(WORKER_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tts:1,lang:l,text})});
+  if(!r.ok){let e='fail';try{e=(await r.json()).error}catch(x){}throw new Error(e)}
+  const b=await r.blob(); if(b.size<500)throw new Error('empty');
+  await KV.set(key,b);
+  try{const ks=jget('cf_ttskeys',[]).filter(x=>x!==key);ks.push(key);while(ks.length>18){const old=ks.shift();await KV.set(old,undefined)}store.set('cf_ttskeys',JSON.stringify(ks))}catch(e){}
+  return b;
+}
+function voiceEl(){
+  if(TTS.el)return TTS.el;
+  const a=new Audio(); a.preload='auto'; a.setAttribute('playsinline','');
+  a.addEventListener('timeupdate',()=>{if(TTS.mode!=='audio')return;saveResume();uiTick();posState()});
+  a.addEventListener('ended',()=>{if(TTS.mode==='audio')finishItem()});
+  a.addEventListener('pause',()=>{if(TTS.mode==='audio'&&TTS.playing&&!a.ended&&!TTS.seeking){TTS.playing=false;MUS.pause();uiTick()}});
+  a.addEventListener('play',()=>{if(TTS.mode==='audio'&&!TTS.playing&&TTS.item){TTS.playing=true;MUS.start();uiTick()}});
+  a.addEventListener('loadedmetadata',()=>{TTS.dur=a.duration;uiTick()});
+  TTS.el=a; return a;
+}
+function stopVoice(){TTS.tok++;try{speechSynthesis.cancel()}catch(e){} if(TTS.el){TTS.el.pause();if(TTS.url){URL.revokeObjectURL(TTS.url);TTS.url=null}TTS.el.removeAttribute('src');try{TTS.el.load()}catch(e){}}}
+/* enhetsstemme (reserve) */
 function speakChunk(){
-  if(!TTS.playing)return;
+  if(!TTS.playing||TTS.mode!=='device')return;
   speechSynthesis.cancel(); const my=++TTS.tok; const text=TTS.chunks[TTS.i];
   if(text==null){finishItem();return}
   setTimeout(()=>{
@@ -114,32 +153,70 @@ function speakChunk(){
   },70);
   uiTick();
 }
-function saveResume(){if(TTS.item)store.set('cf_resume',JSON.stringify({id:TTS.item.id,i:TTS.i}))}
-async function startItem(item,queue,at){
-  TTS.queue=queue||[item]; TTS.qi=Math.max(0,TTS.queue.findIndex(x=>x.id===item.id)); TTS.item=item;
-  const parts=await item.text(); TTS.lang=item.lang==='en'?'en':lang; TTS.chunks=chunkText(parts); TTS.i=Math.min(at||0,Math.max(0,TTS.chunks.length-1));
-  TTS.playing=true; MUS.start(); speakChunk(); setMedia(); buildPlayer(); showMini(); renderListen();
+/* iPhone tillater bare lyd som starter i et trykk: lås opp lydelementet med et stille klipp */
+let SILENT=null;
+function silentUrl(){
+  if(SILENT)return SILENT; const n=1600,b=new ArrayBuffer(44+n),v=new DataView(b); const ws=(p,s)=>[...s].forEach((c,i)=>v.setUint8(p+i,c.charCodeAt(0)));
+  ws(0,'RIFF');v.setUint32(4,36+n,true);ws(8,'WAVEfmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,8000,true);v.setUint32(28,8000,true);v.setUint16(32,1,true);v.setUint16(34,8,true);ws(36,'data');v.setUint32(40,n,true);
+  for(let i=0;i<n;i++)v.setUint8(44+i,128); return SILENT=URL.createObjectURL(new Blob([b],{type:'audio/wav'}));
 }
-function pauseTTS(){TTS.playing=false;TTS.tok++;speechSynthesis.cancel();MUS.pause();uiTick()}
-function resumeTTS(){if(!TTS.item)return;TTS.playing=true;MUS.start();speakChunk()}
+function unlockVoice(){try{const a=voiceEl();if(!a.src||a.src===SILENT||!TTS.item){a.src=silentUrl();a.play().then(()=>{if(a.src===SILENT)a.pause()}).catch(()=>{})}}catch(e){}}
+async function startItem(item,queue,at){
+  unlockVoice(); stopVoice(); const my=TTS.tok;
+  TTS.queue=queue||[item]; TTS.qi=Math.max(0,TTS.queue.findIndex(x=>x.id===item.id)); TTS.item=item; TTS.playing=false; TTS.loading=true; TTS.chunks=[]; TTS.i=0; TTS.mode='audio'; TTS.dur=0;
+  buildPlayer(); showMini(); renderListen(); try{MUS.pause()}catch(e){}
+  let parts; try{parts=await item.text()}catch(e){TTS.loading=false;uiTick();return}
+  if(my!==TTS.tok)return;
+  TTS.lang=item.lang==='en'?'en':lang; TTS.chunks=chunkText(parts);
+  let blob=null; try{blob=await getVoiceBlob(parts.join('\n\n'),TTS.lang)}catch(e){blob=null}
+  if(my!==TTS.tok)return;
+  TTS.loading=false; const f=Math.min(0.98,Math.max(0,at||0));
+  if(blob){
+    TTS.mode='audio'; const a=voiceEl(); TTS.url=URL.createObjectURL(blob); a.src=TTS.url; a.playbackRate=TTS.speed*baseRate();
+    const go=()=>{ if(my!==TTS.tok)return; if(f>0&&isFinite(a.duration))a.currentTime=f*a.duration; TTS.playing=true; MUS.start(); a.play().then(()=>uiTick()).catch(()=>{TTS.playing=false;MUS.pause();uiTick()}) };
+    if(a.readyState>=1)go(); else a.addEventListener('loadedmetadata',go,{once:true});
+  } else {
+    TTS.mode='device'; TTS.i=Math.floor(f*TTS.chunks.length); TTS.playing=true; MUS.start(); speakChunk();
+  }
+  setMedia(); buildPlayer(); showMini(); renderListen();
+}
+function pauseTTS(){
+  if(TTS.mode==='audio'&&TTS.el){TTS.playing=false;TTS.el.pause()} else {TTS.playing=false;TTS.tok++;try{speechSynthesis.cancel()}catch(e){}}
+  MUS.pause(); saveResume(true); uiTick();
+}
+function resumeTTS(){
+  if(!TTS.item||TTS.loading)return; TTS.playing=true; MUS.start();
+  if(TTS.mode==='audio'&&TTS.el){TTS.el.playbackRate=TTS.speed*baseRate();TTS.el.play().then(()=>uiTick()).catch(()=>{TTS.playing=false;MUS.pause();uiTick()})} else speakChunk();
+  uiTick();
+}
 function toggleTTS(){TTS.playing?pauseTTS():resumeTTS()}
+function seekFrac(f){
+  if(!TTS.item||TTS.loading)return; f=Math.min(0.999,Math.max(0,f));
+  if(TTS.mode==='audio'&&TTS.el&&isFinite(TTS.el.duration)){TTS.seeking=true;TTS.el.currentTime=f*TTS.el.duration;setTimeout(()=>{TTS.seeking=false},300)}
+  else{TTS.i=Math.floor(f*TTS.chunks.length);if(TTS.playing)speakChunk()}
+  saveResume(true); uiTick();
+}
 function skip(sec){
-  if(!TTS.item)return; let i=TTS.i;
+  if(!TTS.item||TTS.loading)return;
+  if(TTS.mode==='audio'&&TTS.el&&isFinite(TTS.el.duration)){seekFrac((TTS.el.currentTime+sec)/TTS.el.duration);return}
+  let i=TTS.i;
   if(sec>0){let s=0;while(i<TTS.chunks.length-1&&s<sec){s+=secsOf(i,i+1);i++}}
   else{let s=0;while(i>0&&s<-sec){i--;s+=secsOf(i,i+1)}}
-  TTS.i=i; saveResume(); if(TTS.playing)speakChunk();else uiTick();
+  TTS.i=i; saveResume(true); if(TTS.playing)speakChunk();else uiTick();
 }
 function finishItem(){
-  TTS.playing=false; MUS.pause(); store.set('cf_resume',JSON.stringify({id:TTS.item.id,i:0}));
+  TTS.playing=false; MUS.pause(); store.set('cf_resume',JSON.stringify({id:TTS.item.id,f:0}));
   const nxt=TTS.queue[TTS.qi+1]; if(nxt){startItem(nxt,TTS.queue,0)}else{uiTick();renderListen()}
 }
-function nextItem(){const n=TTS.queue[TTS.qi+1];if(n){speechSynthesis.cancel();TTS.tok++;startItem(n,TTS.queue,0)}}
-function setSpeed(){const ss=[0.8,1,1.15,1.3,1.5],k=(ss.indexOf(TTS.speed)+1)%ss.length;TTS.speed=ss[k];store.set('cf_speed',String(TTS.speed));if(TTS.playing)speakChunk();uiTick()}
+function nextItem(){const n=TTS.queue[TTS.qi+1];if(n){startItem(n,TTS.queue,0)}}
+function setSpeed(){const ss=[0.8,1,1.15,1.3,1.5],k=(ss.indexOf(TTS.speed)+1)%ss.length;TTS.speed=ss[k];store.set('cf_speed',String(TTS.speed));if(TTS.mode==='audio'&&TTS.el)TTS.el.playbackRate=TTS.speed*baseRate();else if(TTS.playing)speakChunk();uiTick()}
+function posState(){try{if(TTS.mode==='audio'&&TTS.el&&isFinite(TTS.el.duration)&&'mediaSession' in navigator)navigator.mediaSession.setPositionState({duration:TTS.el.duration,position:Math.min(TTS.el.currentTime,TTS.el.duration),playbackRate:TTS.speed*baseRate()})}catch(e){}}
 function setMedia(){
   try{ if(!('mediaSession' in navigator)||!TTS.item)return;
     navigator.mediaSession.metadata=new MediaMetadata({title:TTS.item.title,artist:'Catholic Faith',album:TTS.item.sub,artwork:[{src:'assets/jesus.webp',sizes:'512x512',type:'image/webp'}]});
     const h=(a,f)=>{try{navigator.mediaSession.setActionHandler(a,f)}catch(e){}};
     h('play',resumeTTS);h('pause',pauseTTS);h('seekbackward',()=>skip(-15));h('seekforward',()=>skip(15));h('nexttrack',nextItem);
+    h('seekto',d=>{if(d&&isFinite(d.seekTime)&&curDur()>0)seekFrac(d.seekTime/curDur())});
   }catch(e){}
 }
 
@@ -155,7 +232,7 @@ const MUS={
   on:store.get('cf_mon','1')==='1', sel:store.get('cf_msel','ambient'), vol:+store.get('cf_mvol','0.2'), tracks:[],
   ctx:null,master:null,oscs:[],audio:null,url:null,running:false,
   save(){store.set('cf_mon',this.on?'1':'0');store.set('cf_msel',this.sel);store.set('cf_mvol',String(this.vol))},
-  async load(){this.tracks=(await IDB.all()).map(t=>({id:t.id,name:t.name,blob:t.blob}))},
+  async load(){this.tracks=(await IDB.all()).map(t=>({id:t.id,name:t.name,blob:t.blob})); if(this.sel==='ambient'&&this.tracks.length&&store.get('cf_msel_user','0')!=='1'){this.sel=this.tracks[0].id;this.save()}},
   start(){
     if(!this.on){this.stop();return}
     this.running=true;
@@ -165,7 +242,7 @@ const MUS={
   },
   pause(){this.running=false;this.stopAmbient();if(this.audio)this.audio.pause()},
   stop(){this.running=false;this.stopAmbient();this.stopFile()},
-  setVol(v){this.vol=v;this.save();if(this.master&&this.ctx)this.master.gain.setTargetAtTime(v*0.5,this.ctx.currentTime,0.2);if(this.audio)this.audio.volume=v},
+  setVol(v){this.vol=v;this.save();if(this.master&&this.ctx)this.master.gain.setTargetAtTime(v*0.5,this.ctx.currentTime,0.2);if(this.fileGain&&this.ctx)this.fileGain.gain.setTargetAtTime(v,this.ctx.currentTime,0.1);else if(this.audio)this.audio.volume=v},
   startAmbient(){
     if(this.oscs.length)return;
     try{
@@ -193,12 +270,17 @@ const MUS={
   },
   playFile(id){
     const t=this.tracks.find(x=>x.id===id); if(!t)return;
-    if(this.audio&&this.audio.__id===id){this.audio.volume=this.vol;this.audio.play().catch(()=>{});return}
-    this.stopFile(); this.url=URL.createObjectURL(t.blob); const a=new Audio(this.url); a.__id=id; a.volume=this.vol; a.loop=(this.sel!=='shuffle'&&this.tracks.length<2);
+    if(this.audio&&this.audio.__id===id){this.audio.play().catch(()=>{});return}
+    this.stopFile(); this.url=URL.createObjectURL(t.blob); const a=new Audio(this.url); a.__id=id; a.setAttribute('playsinline',''); a.loop=(this.sel!=='shuffle'&&this.tracks.length<2);
     a.onended=()=>{if(this.running)this.start()};
+    // via Web Audio: volumet kan styres (på iPhone ignoreres vanlig volum) og lyden blandes med stemmen
+    try{
+      const C=window.AudioContext||window.webkitAudioContext; this.ctx=this.ctx||new C(); if(this.ctx.state==='suspended')this.ctx.resume();
+      const src=this.ctx.createMediaElementSource(a); const g=this.ctx.createGain(); g.gain.value=this.vol; src.connect(g); g.connect(this.ctx.destination); this.fileGain=g; a.volume=1;
+    }catch(e){this.fileGain=null;a.volume=this.vol}
     this.audio=a; a.play().catch(()=>{});
   },
-  stopFile(){if(this.audio){this.audio.pause();this.audio.removeAttribute('src');this.audio=null}if(this.url){URL.revokeObjectURL(this.url);this.url=null}},
+  stopFile(){if(this.audio){this.audio.pause();this.audio.removeAttribute('src');this.audio=null}this.fileGain=null;if(this.url){URL.revokeObjectURL(this.url);this.url=null}},
   async add(files){
     for(const f of files){const id='m'+Date.now()+Math.random().toString(36).slice(2,6);const name=f.name.replace(/\.[^.]+$/,'');await IDB.put({id,name,blob:f});}
     await this.load(); buildMusicPanel();
@@ -225,7 +307,7 @@ function renderListen(){
   h.onclick=()=>startItem(dItem,A.guides.filter(x=>x.id.startsWith('gd-'+g+'-')),0); w.appendChild(h);}
   // fortsett
   const rs=jget('cf_resume',null), ri=rs&&[...ALL,...(typeof genArchive==='function'?[...genArchive('story'),...genArchive('lesson')].map(genItem):[])].find(x=>x.id===rs.id);
-  if(ri&&rs.i>0){const r=mk('button','hero alt'); const rx=mk('div'); rx.appendChild(mk('small','',t.resume)); rx.appendChild(mk('b','',ri.title)); r.appendChild(rx); r.appendChild(mk('div','pl','▶')); r.onclick=()=>startItem(ri,A[ri.kind]||[ri],rs.i); w.appendChild(r)}
+  if(ri&&rs.f>0.02){const r=mk('button','hero alt'); const rx=mk('div'); rx.appendChild(mk('small','',t.resume)); rx.appendChild(mk('b','',ri.title)); r.appendChild(rx); r.appendChild(mk('div','pl','▶')); r.onclick=()=>startItem(ri,A[ri.kind]||[ri],rs.f); w.appendChild(r)}
   // Lyd og musikk (åpne/lukk)
   const mo=store.get('cf_musopen','0')==='1';
   const mb=mk('button','row2'); mb.appendChild(mk('div','ic','♪')); const mtx=mk('div','tx'); mtx.appendChild(mk('b','',t.audio)); mtx.appendChild(mk('small','',t.audioSub)); mb.appendChild(mtx); mb.appendChild(mk('span','fav',mo?'⌃':'⌄'));
@@ -258,22 +340,27 @@ function buildPlayer(){
   const t=LN[lang]; const it=TTS.item; if(!it)return;
   p.innerHTML=`<div class="top"><button class="x" id="pClose" aria-label="Lukk">⌄</button><button class="x" id="pFav" aria-label="${t.fav}"></button></div>
   <div class="art" id="pArt"></div><h2 id="pTitle"></h2><div class="sub2" id="pSub"></div><div class="line" id="pLine"></div>
-  <div class="prog" id="pProg"><i id="pBar"></i></div>
+  <div class="tl"><span id="pCur">0:00</span><input type="range" id="pSeek" min="0" max="1000" value="0" aria-label="Spol"><span id="pDur">0:00</span></div>
   <div class="ctl"><button id="pBack">−15</button><button class="big" id="pPlay"></button><button id="pFwd">+15</button></div>
   <div class="ctl2"><button id="pSpd"></button><button id="pNext">${t.next} ›</button></div>
   <div class="mus" id="pMus"></div>`;
   $('#pTitle').textContent=it.title; $('#pSub').textContent=it.sub;
   $('#pClose').onclick=closePlayer; $('#pPlay').onclick=toggleTTS; $('#pBack').onclick=()=>skip(-15); $('#pFwd').onclick=()=>skip(15); $('#pSpd').onclick=setSpeed; $('#pNext').onclick=nextItem;
   $('#pFav').onclick=()=>{toggleFav(it.id);uiTick();renderListen()};
-  $('#pProg').onclick=e=>{const r=e.currentTarget.getBoundingClientRect();TTS.i=Math.floor((e.clientX-r.left)/r.width*TTS.chunks.length);saveResume();if(TTS.playing)speakChunk();else uiTick()};
+  const sk=$('#pSeek');
+  sk.addEventListener('input',()=>{TTS.drag=true;const d=curDur();$('#pCur').textContent=fmtT(sk.value/1000*d)});
+  sk.addEventListener('change',()=>{seekFrac(sk.value/1000);setTimeout(()=>{TTS.drag=false},350)});
+  sk.addEventListener('pointerup',()=>{setTimeout(()=>{TTS.drag=false},350)});
   buildMusicPanel();
 }
 function openPlayer(){if(!TTS.item)return;buildPlayer();requestAnimationFrame(()=>$('#player').classList.add('open'));uiTick()}
 function closePlayer(){const p=$('#player');if(p)p.classList.remove('open')}
 function uiTick(){
-  const it=TTS.item; if(!it)return; const pct=TTS.chunks.length?Math.min(100,TTS.i/TTS.chunks.length*100):0;
-  const m=$('#mini'); if(m){m.querySelector('.t').textContent=it.title;m.querySelector('.pb').textContent=TTS.playing?'❚❚':'▶';m.querySelector('.pr').style.width=pct+'%'}
-  const pl=$('#pPlay'); if(pl){pl.textContent=TTS.playing?'❚❚':'▶';$('#pBar').style.width=pct+'%';$('#pLine').textContent=TTS.chunks[TTS.i]||'';$('#pSpd').textContent=TTS.speed+'×';$('#pArt').classList.toggle('pulse',TTS.playing);
+  const it=TTS.item; if(!it)return; const fr=curFrac(), pct=fr*100, t=LN[lang];
+  const m=$('#mini'); if(m){m.querySelector('.t').textContent=it.title;m.querySelector('.pb').textContent=TTS.loading?'…':(TTS.playing?'❚❚':'▶');m.querySelector('.pr').style.width=pct+'%'}
+  const pl=$('#pPlay'); if(pl){
+    pl.textContent=TTS.loading?'…':(TTS.playing?'❚❚':'▶'); $('#pLine').textContent=TTS.loading?t.loadingAudio:lineAt(); $('#pSpd').textContent=TTS.speed+'×'; $('#pArt').classList.toggle('pulse',TTS.playing);
+    const sk=$('#pSeek'); if(sk&&!TTS.drag){sk.value=Math.round(fr*1000); sk.style.setProperty('--p',pct+'%'); $('#pCur').textContent=fmtT(curPos()); $('#pDur').textContent=(TTS.mode==='audio'?'':'≈')+fmtT(curDur())}
     const f=$('#pFav'); if(f){const on=favs().includes(it.id);f.textContent=on?'♥':'♡';f.style.color=on?'#C0392B':''}}
 }
 function buildMusicPanel(){const a=$('#pMus');if(a)fillMusic(a);const b=$('#lytMus');if(b)fillMusic(b)}
@@ -302,7 +389,7 @@ function fillMusic(box){
   // Musikk
   const h=mk('div','h'); h.style.marginTop='16px'; h.appendChild(mk('span','',t.music)); const sw=mk('div','sw'+(MUS.on?' on':'')); sw.onclick=()=>{MUS.on=!MUS.on;MUS.save();if(MUS.on&&TTS.playing)MUS.start();else MUS.stop();buildMusicPanel()}; h.appendChild(sw); box.appendChild(h);
   const chips=mk('div','chips');
-  const chip=(label,val)=>{const b=mk('button',MUS.sel===val?'on':'',label);b.onclick=()=>{MUS.sel=val;MUS.save();if(TTS.playing&&MUS.on){MUS.stop();MUS.start()}buildMusicPanel()};return b};
+  const chip=(label,val)=>{const b=mk('button',MUS.sel===val?'on':'',label);b.onclick=()=>{MUS.sel=val;store.set('cf_msel_user','1');MUS.save();if(TTS.playing&&MUS.on){MUS.stop();MUS.start()}buildMusicPanel()};return b};
   chips.appendChild(chip(t.ambient,'ambient'));
   MUS.tracks.forEach(tr=>{chips.appendChild(chip(tr.name,tr.id))});
   if(MUS.tracks.length>1)chips.appendChild(chip(t.shuffle,'shuffle'));
@@ -321,5 +408,6 @@ addEventListener('pointerdown',()=>{
   if(unlocked)return; unlocked=true;
   try{const C=window.AudioContext||window.webkitAudioContext;MUS.ctx=MUS.ctx||new C();MUS.ctx.resume()}catch(e){}
   try{const u=new SpeechSynthesisUtterance(' ');u.volume=0;speechSynthesis.speak(u)}catch(e){}
+  try{unlockVoice()}catch(e){}
 },{passive:true});
 renderListen();
