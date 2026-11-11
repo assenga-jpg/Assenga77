@@ -49,6 +49,9 @@ const STORIES=[
   en:["A lawyer asked Jesus: «What must I do to inherit eternal life?» Jesus asked what is written in the Law, and the man answered: «You shall love the Lord your God with all your heart, and your neighbor as yourself.» «You have answered rightly,» said Jesus. «Do this and you will live.» But the man asked: «And who is my neighbor?»","Then Jesus told him: «A man was going down from Jerusalem to Jericho. He fell into the hands of robbers, who beat him and left him half dead. A priest came along the same road, saw him and passed by on the other side. A Levite came too and did the same.","But a Samaritan, who was traveling, came to where he was. When he saw him he was moved with compassion. He went to him, bandaged his wounds and poured oil and wine on them. Then he lifted him onto his own animal, took him to an inn and cared for him. The next day he gave the innkeeper two denarii and said: Take care of him, and whatever more you spend, I will repay you when I return.»","«Which of these three was a neighbor to the man who fell among the robbers?» asked Jesus. «The one who showed him mercy,» the man answered. And Jesus said: «Go and do likewise.»"]}
 ];
 
+/* lange versjoner (ca. 4 min) fra stories-long.js */
+if(typeof STORIES_LONG!=='undefined')STORIES.forEach(S=>{const L=STORIES_LONG[S.id];if(L&&L.no&&L.en){S.no=L.no;S.en=L.en}});
+
 /* ---------- Lagring ---------- */
 const jget=(k,d)=>{try{const v=JSON.parse(store.get(k,'null'));return v==null?d:v}catch(e){return d}};
 const favs=()=>jget('cf_favs',[]);
@@ -90,7 +93,7 @@ async function refTextL(ref,forceEn){
   const P=await passage(id,+m[2],+m[3],+m[4],forceEn); return {parts:P.vs,tr:P.tr};
 }
 const refText=async(ref,en)=>(await refTextL(ref,en)).parts;
-function resetPlayer(){try{pauseTTS()}catch(e){} try{stopVoice()}catch(e){} TTS.item=null;TTS.chunks=[];TTS.i=0;TTS.queue=[];TTS.loading=false;TTS.mixed=false;TTS.voiceBlob=null;try{MUS.stop()}catch(e){} const m=$('#mini');if(m){m.classList.remove('show');const tt=m.querySelector('.t');if(tt)tt.textContent=''}const p=$('#player');if(p)p.remove()}
+function resetPlayer(){try{pauseTTS()}catch(e){} try{stopVoice()}catch(e){} TTS.item=null;TTS.chunks=[];TTS.i=0;TTS.queue=[];TTS.loading=false;TTS.mixed=false;TTS.voiceBlob=null;TTS.pre=null;TTS.preFail=null;TTS.keep=false;try{MUS.stop()}catch(e){} const m=$('#mini');if(m){m.classList.remove('show');const tt=m.querySelector('.t');if(tt)tt.textContent=''}const p=$('#player');if(p)p.remove()}
 function chunkText(parts){
   const out=[];
   parts.forEach(p=>{
@@ -108,7 +111,7 @@ function chunkText(parts){
 }
 
 /* ---------- Stemme: ekte lydfil fra serveren (AI-stemme), reserve = enhetens stemme ---------- */
-const TTS={chunks:[],i:0,playing:false,loading:false,speed:+store.get('cf_speed','1'),item:null,queue:[],qi:0,lang:'en',tok:0,mode:'device',mixed:false,voiceBlob:null,el:null,dur:0,drag:false,lastSave:0};
+const TTS={chunks:[],i:0,playing:false,loading:false,speed:+store.get('cf_speed','1'),item:null,queue:[],qi:0,lang:'en',tok:0,mode:'device',mixed:false,voiceBlob:null,el:null,dur:0,drag:false,lastSave:0,pre:null,preBusy:false,keep:false};
 function pickVoice(l){
   const vs=speechSynthesis.getVoices(); if(!vs.length)return null;
   const saved=store.get('cf_voice_'+(l==='en'?'en':'no'),''); if(saved){const sv=vs.find(v=>v.name===saved);if(sv)return sv}
@@ -123,8 +126,8 @@ function pickVoice(l){
 const baseRate=()=>1;   // Azure-stemmen leser i naturlig tempo   // AI-stemmen leser fort, så vi tar den litt roligere
 function wordsPerSec(){return 2.3*TTS.speed}
 function secsOf(i0,i1){let w=0;for(let k=i0;k<i1&&k<TTS.chunks.length;k++)w+=TTS.chunks[k].split(/\s+/).length;return w/wordsPerSec()}
-function curPos(){return TTS.mode==='audio'&&TTS.el?(TTS.el.currentTime||0):secsOf(0,TTS.i)}
-function curDur(){return TTS.mode==='audio'&&TTS.el&&isFinite(TTS.el.duration)?TTS.el.duration:secsOf(0,TTS.chunks.length)}
+function curPos(){return TTS.keep?0:TTS.mode==='audio'&&TTS.el?(TTS.el.currentTime||0):secsOf(0,TTS.i)}
+function curDur(){return TTS.keep?0:TTS.mode==='audio'&&TTS.el&&isFinite(TTS.el.duration)?TTS.el.duration:secsOf(0,TTS.chunks.length)}
 function curFrac(){const d=curDur();return d>0?Math.min(1,curPos()/d):0}
 function fmtT(s){s=Math.max(0,Math.round(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
 function lineAt(){
@@ -151,14 +154,38 @@ async function getVoiceBlob(text,l){
 function voiceEl(){
   if(TTS.el)return TTS.el;
   const a=new Audio(); a.preload='auto'; a.setAttribute('playsinline',''); a.style.display='none'; document.body.appendChild(a);
-  a.addEventListener('timeupdate',()=>{if(TTS.mode!=='audio')return;saveResume();uiTick();posState()});
-  a.addEventListener('ended',()=>{if(TTS.mode==='audio')finishItem()});
-  a.addEventListener('pause',()=>{if(TTS.mode==='audio'&&TTS.playing&&!a.ended&&!TTS.seeking){TTS.playing=false;mPause();uiTick()}});
-  a.addEventListener('play',()=>{if(TTS.mode==='audio'&&!TTS.playing&&TTS.item){TTS.playing=true;mStart();uiTick()}});
-  a.addEventListener('loadedmetadata',()=>{TTS.dur=a.duration;uiTick()});
+  a.addEventListener('timeupdate',()=>{if(TTS.mode!=='audio'||TTS.keep)return;saveResume();uiTick();posState();if((a.currentTime||0)>6)prefetchNext()});
+  a.addEventListener('ended',()=>{if(TTS.mode==='audio'&&!TTS.keep)finishItem()});
+  a.addEventListener('pause',()=>{if(TTS.mode==='audio'&&!TTS.keep&&TTS.playing&&!a.ended&&!TTS.seeking){TTS.playing=false;mPause();uiTick()}});
+  a.addEventListener('play',()=>{if(TTS.mode==='audio'&&!TTS.keep&&!TTS.playing&&TTS.item){TTS.playing=true;mStart();uiTick()}});
+  a.addEventListener('loadedmetadata',()=>{if(TTS.keep)return;TTS.dur=a.duration;uiTick()});
   TTS.el=a; return a;
 }
-function stopVoice(){TTS.tok++;try{speechSynthesis.cancel()}catch(e){} if(TTS.el){TTS.el.pause();if(TTS.url){URL.revokeObjectURL(TTS.url);TTS.url=null}TTS.el.removeAttribute('src');try{TTS.el.load()}catch(e){}}}
+/* Forhåndslaget neste del: lyd + musikk er klar før denne er ferdig, så avspillingen går rett videre (også med låst skjerm) */
+const MSIG=()=>[MUS.on,MUS.sel,MUS.vol,MUS.tracks.length].join('|');
+async function prefetchNext(){
+  const nxt=TTS.queue[TTS.qi+1]; if(!nxt||TTS.preBusy||TTS.mode!=='audio'||TTS.preFail===nxt.id)return;
+  if(TTS.pre&&TTS.pre.id===nxt.id&&TTS.pre.sig===MSIG())return;
+  TTS.preBusy=true; const my=TTS.tok, sig=MSIG();
+  try{
+    const parts=await nxt.text(); const l=nxt.lang==='en'?'en':lang;
+    const voice=await getVoiceBlob(parts.join('\n\n'),l);
+    let play=voice, mixed=false; if(MUS.on){try{const m=await mixVoiceMusic(voice); if(m){play=m;mixed=true}}catch(e){}}
+    if(my===TTS.tok)TTS.pre={id:nxt.id,parts,l,voice,play,mixed,sig};
+  }catch(e){TTS.preFail=nxt.id}
+  TTS.preBusy=false;
+}
+function playPrefetched(item,P){
+  const a=TTS.el, old=TTS.url; TTS.tok++; try{speechSynthesis.cancel()}catch(e){}
+  TTS.qi=TTS.queue.findIndex(x=>x.id===item.id); TTS.item=item; TTS.pre=null; TTS.keep=false; a.loop=false;
+  TTS.chunks=chunkText(P.parts); TTS.i=0; TTS.mode='audio'; TTS.lang=P.l; TTS.dur=0; TTS.voiceBlob=P.voice; TTS.mixed=P.mixed; TTS.loading=false;
+  if(P.mixed)MUS.stop();
+  TTS.url=URL.createObjectURL(P.play); a.src=TTS.url; a.playbackRate=TTS.speed*baseRate();
+  TTS.playing=true; mStart(); a.play().then(()=>uiTick()).catch(()=>{TTS.playing=false;mPause();uiTick()});
+  if(old)URL.revokeObjectURL(old);
+  setMedia(); buildPlayer(); showMini(); renderListen();
+}
+function stopVoice(){TTS.tok++;TTS.keep=false;try{speechSynthesis.cancel()}catch(e){} if(TTS.el){TTS.el.loop=false;TTS.el.pause();if(TTS.url){URL.revokeObjectURL(TTS.url);TTS.url=null}TTS.el.removeAttribute('src');try{TTS.el.load()}catch(e){}}}
 /* enhetsstemme (reserve) */
 function speakChunk(){
   if(!TTS.playing||TTS.mode!=='device')return;
@@ -257,11 +284,16 @@ function silentUrl(){
   for(let i=0;i<n;i++)v.setUint8(44+i,128); return SILENT=URL.createObjectURL(new Blob([b],{type:'audio/wav'}));
 }
 function unlockVoice(){try{const a=voiceEl();if(!a.src||a.src===SILENT||!TTS.item){a.src=silentUrl();a.play().then(()=>{if(a.src===SILENT)a.pause()}).catch(()=>{})}}catch(e){}}
-async function startItem(item,queue,at){
-  unlockVoice(); stopVoice(); const my=TTS.tok;
+async function startItem(item,queue,at,auto){
+  if(auto&&TTS.el&&TTS.mode==='audio'){
+    // automatisk neste uten ferdig lyd: hold lydøkten i live med et stille klipp mens neste del lages (viktig med låst skjerm)
+    TTS.tok++; try{speechSynthesis.cancel()}catch(e){} const a=TTS.el; if(TTS.url){URL.revokeObjectURL(TTS.url);TTS.url=null}
+    TTS.keep=true; a.loop=true; a.src=silentUrl(); a.play().catch(()=>{});
+  } else { unlockVoice(); stopVoice(); }
+  const my=TTS.tok;
   TTS.queue=queue||[item]; TTS.qi=Math.max(0,TTS.queue.findIndex(x=>x.id===item.id)); TTS.item=item; TTS.playing=false; TTS.loading=true; TTS.chunks=[]; TTS.i=0; TTS.mode='audio'; TTS.dur=0; TTS.mixed=false; TTS.voiceBlob=null;
   buildPlayer(); showMini(); renderListen(); try{MUS.pause()}catch(e){}
-  let parts; try{parts=await item.text()}catch(e){TTS.loading=false;uiTick();return}
+  let parts; try{parts=await item.text()}catch(e){TTS.loading=false;if(TTS.keep){TTS.keep=false;if(TTS.el){TTS.el.loop=false;TTS.el.pause()}}uiTick();return}
   if(my!==TTS.tok)return;
   TTS.lang=item.lang==='en'?'en':lang; TTS.chunks=chunkText(parts);
   let blob=null; try{blob=await getVoiceBlob(parts.join('\n\n'),TTS.lang)}catch(e){blob=null}
@@ -271,10 +303,11 @@ async function startItem(item,queue,at){
   if(my!==TTS.tok)return;
   TTS.loading=false; const f=Math.min(0.98,Math.max(0,at||0));
   if(blob){
-    TTS.mode='audio'; const a=voiceEl(); TTS.url=URL.createObjectURL(playBlob); a.src=TTS.url; a.playbackRate=TTS.speed*baseRate();
+    TTS.mode='audio'; const a=voiceEl(); TTS.keep=false; a.loop=false; TTS.url=URL.createObjectURL(playBlob); a.src=TTS.url; a.playbackRate=TTS.speed*baseRate();
     const go=()=>{ if(my!==TTS.tok)return; if(f>0&&isFinite(a.duration))a.currentTime=f*a.duration; TTS.playing=true; mStart(); a.play().then(()=>uiTick()).catch(()=>{TTS.playing=false;mPause();uiTick()}) };
     if(a.readyState>=1)go(); else a.addEventListener('loadedmetadata',go,{once:true});
   } else {
+    if(TTS.keep){TTS.keep=false;if(TTS.el){TTS.el.loop=false;TTS.el.pause()}}
     TTS.mode='device'; TTS.i=Math.floor(f*TTS.chunks.length); TTS.playing=true; MUS.start(); speakChunk();
   }
   setMedia(); buildPlayer(); showMini(); renderListen();
@@ -305,9 +338,14 @@ function skip(sec){
 }
 function finishItem(){
   TTS.playing=false; mPause(); store.set('cf_resume',JSON.stringify({id:TTS.item.id,f:0}));
-  const nxt=TTS.queue[TTS.qi+1]; if(nxt){startItem(nxt,TTS.queue,0)}else{uiTick();renderListen()}
+  if(TTS.queue[TTS.qi+1])goNext(true); else {uiTick();renderListen()}
 }
-function nextItem(){const n=TTS.queue[TTS.qi+1];if(n){startItem(n,TTS.queue,0)}}
+function goNext(auto){
+  const nxt=TTS.queue[TTS.qi+1]; if(!nxt)return; const P=TTS.pre;
+  if(P&&P.id===nxt.id&&P.sig===MSIG()&&TTS.el&&TTS.mode==='audio'&&!TTS.keep){playPrefetched(nxt,P);return}   // ferdig lyd: bytt rett over
+  startItem(nxt,TTS.queue,0,auto);
+}
+function nextItem(){if(TTS.queue[TTS.qi+1])goNext(false)}
 function setSpeed(){const ss=[0.8,1,1.15,1.3,1.5],k=(ss.indexOf(TTS.speed)+1)%ss.length;TTS.speed=ss[k];store.set('cf_speed',String(TTS.speed));if(TTS.mode==='audio'&&TTS.el)TTS.el.playbackRate=TTS.speed*baseRate();else if(TTS.playing)speakChunk();uiTick()}
 function posState(){try{if(TTS.mode==='audio'&&TTS.el&&isFinite(TTS.el.duration)&&'mediaSession' in navigator)navigator.mediaSession.setPositionState({duration:TTS.el.duration,position:Math.min(TTS.el.currentTime,TTS.el.duration),playbackRate:TTS.speed*baseRate()})}catch(e){}}
 function setMedia(){
@@ -407,7 +445,7 @@ function renderListen(){
   if(allDone&&typeof genHero==='function'){w.appendChild(genHero('lesson'))}
   else{
   const h=mk('button','hero'); const hx=mk('div'); hx.appendChild(mk('small','',t.today)); hx.appendChild(mk('b','',dItem.title)); h.appendChild(hx); h.appendChild(mk('div','pl','▶'));
-  h.onclick=()=>startItem(dItem,A.guides.filter(x=>x.id.startsWith('gd-'+g+'-')),0); w.appendChild(h);}
+  h.onclick=()=>startItem(dItem,A.guides,0); w.appendChild(h);}
   // fortsett
   const rs=jget('cf_resume',null), ri=rs&&[...ALL,...(typeof genArchive==='function'?[...genArchive('story'),...genArchive('lesson')].map(genItem):[])].find(x=>x.id===rs.id);
   if(ri&&rs.f>0.02){const r=mk('button','hero alt'); const rx=mk('div'); rx.appendChild(mk('small','',t.resume)); rx.appendChild(mk('b','',ri.title)); r.appendChild(rx); r.appendChild(mk('div','pl','▶')); r.onclick=()=>startItem(ri,A[ri.kind]||[ri],rs.f); w.appendChild(r)}
@@ -428,8 +466,9 @@ function renderListen(){
   };
   const hasGen=typeof genHero==='function';
   if(lt==='bible')A.bible.forEach(it=>w.appendChild(row(it,A.bible)));
-  else if(lt==='stories'){if(hasGen){const hg=genHero('story',true);hg.style.marginTop='12px';w.appendChild(hg);w.appendChild(genRows('story',row))}A.stories.forEach(it=>w.appendChild(row(it,A.stories)))}
-  else if(lt==='guides'){if(hasGen){const hg=genHero('lesson',true);hg.style.marginTop='12px';w.appendChild(hg);w.appendChild(genRows('lesson',row))}GUIDES.forEach((G,gi)=>{w.appendChild(mk('div','gh',G[lang]));const list=A.guides.filter(x=>x.id.startsWith('gd-'+gi+'-'));list.forEach(it=>w.appendChild(row(it,list)))})}
+  else if(lt==='stories'){const sAll=[...(hasGen?genArchive('story').map(genItem):[]),...A.stories];   // alle historier i rekkefølge: spilles videre automatisk
+    if(hasGen){const hg=genHero('story',true);hg.style.marginTop='12px';w.appendChild(hg);w.appendChild(genRows('story',(it)=>row(it,sAll)))}A.stories.forEach(it=>w.appendChild(row(it,sAll)))}
+  else if(lt==='guides'){if(hasGen){const hg=genHero('lesson',true);hg.style.marginTop='12px';w.appendChild(hg);w.appendChild(genRows('lesson',row))}GUIDES.forEach((G,gi)=>{w.appendChild(mk('div','gh',G[lang]));const list=A.guides.filter(x=>x.id.startsWith('gd-'+gi+'-'));list.forEach(it=>w.appendChild(row(it,A.guides)))})}
   else {const list=ALL.filter(x=>fv.includes(x.id)); if(!list.length)w.appendChild(mk('div','empty2',t.noFav)); list.forEach(it=>w.appendChild(row(it,list)))}
 }
 

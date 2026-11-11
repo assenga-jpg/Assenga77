@@ -20,7 +20,7 @@ function genSave(o){
 }
 const genDoneList=()=>jget('cf_gen_done',[]);
 async function getDaily(type){
-  const date=dateLocal(), key=type+'|'+date+'|'+lang, st=genStore();
+  const date=dateLocal(), oldKey=type+'|'+date+'|'+lang, key=oldKey+'|v2', st=genStore();
   if(st[key])return {ok:true,e:st[key]};
   const n=dayN(); const payload={daily:type,lang,date};
   if(type==='story'){const ref=STORY_REFS[((n%STORY_REFS.length)+STORY_REFS.length)%STORY_REFS.length];payload.ref=ref;payload.passage=(await refText(ref,true)).join(' ')}
@@ -29,7 +29,7 @@ async function getDaily(type){
     const r=await fetch(WORKER_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     if(r.status===429)return {ok:false,err:'busy'}; if(!r.ok)return {ok:false,err:'fail'};
     const j=await r.json(); if(!j.title||!Array.isArray(j.body))return {ok:false,err:'fail'};
-    const e={title:j.title,body:j.body,type,date,lang,ref:j.ref||'',topic:j.topic||''}; const s2=genStore(); s2[key]=e; genSave(s2); return {ok:true,e};
+    const e={title:j.title,body:j.body,type,date,lang,ref:j.ref||'',topic:j.topic||''}; const s2=genStore(); delete s2[oldKey]; s2[key]=e; genSave(s2); return {ok:true,e};
   }catch(e){return {ok:false,err:'fail'}}
 }
 function genItem(e){
