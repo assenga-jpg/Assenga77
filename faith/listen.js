@@ -5,6 +5,8 @@ const LN={
      noFav:"Ingen favoritter ennå. Trykk på hjertet ved noe du vil lagre.",ep:"Del",
      speed:"Hastighet",music:"Bakgrunnsmusikk",ambient:"Rolig ambient",shuffle:"Tilfeldig",addm:"+ Legg til egen musikk",
      mnote:"Musikken du legger til lagres bare på denne enheten og lastes aldri opp. Du kan velge lydfiler eller videoer, og appen spiller bare lyden.",
+     mylist:"Min musikk",rename:"Gi nytt navn",save:"Lagre",cancel:"Avbryt",delq:"Slette denne lydfilen fra appen?",nameph:"Navn på lydfilen",
+     frm:"Fra",chap:"kapittel",vers:"vers",to:"til",story:"Historien",reading:"Lesning",
      vol:"Volum",next:"Neste",fav:"Favoritt",nov:"Fant ingen stemme på denne enheten for dette språket. Lyden bruker enhetens standardstemme.",nowp:"Spiller nå",
      audio:"Lyd og musikk",audioSub:"Legg til din egen musikk, velg stemme",loadingAudio:"Lager lyd …",vAI:"AI-stemme",vDev:"enhetens stemme",voice:"Stemme",vEn:"Engelsk stemme",vNo:"Norsk stemme",auto:"Automatisk",try:"Prøv",
      tryEn:"The Lord is my shepherd; I shall not want.",tryNo:"Herren er min hyrde, jeg mangler ingenting.",
@@ -15,6 +17,8 @@ const LN={
      noFav:"No favorites yet. Tap the heart on anything you want to keep.",ep:"Part",
      speed:"Speed",music:"Background music",ambient:"Calm ambient",shuffle:"Shuffle",addm:"+ Add your own music",
      mnote:"Music you add is stored only on this device and is never uploaded. You can pick audio files or videos; the app plays just the sound.",
+     mylist:"My music",rename:"Rename",save:"Save",cancel:"Cancel",delq:"Delete this audio file from the app?",nameph:"Name of the file",
+     frm:"From",chap:"chapter",vers:"verse",to:"to",story:"The story",reading:"Reading",
      vol:"Volume",next:"Next",fav:"Favorite",nov:"No voice found on this device for this language. Audio uses the device's default voice.",nowp:"Now playing",
      audio:"Audio and music",audioSub:"Add your own music, choose a voice",loadingAudio:"Preparing audio …",vAI:"AI voice",vDev:"device voice",voice:"Voice",vEn:"English voice",vNo:"Norwegian voice",auto:"Automatic",try:"Try",
      tryEn:"The Lord is my shepherd; I shall not want.",tryNo:"Herren er min hyrde, jeg mangler ingenting.",
@@ -50,17 +54,35 @@ const jget=(k,d)=>{try{const v=JSON.parse(store.get(k,'null'));return v==null?d:
 const favs=()=>jget('cf_favs',[]);
 const toggleFav=id=>{let f=favs();f=f.includes(id)?f.filter(x=>x!==id):[...f,id];store.set('cf_favs',JSON.stringify(f))};
 
+/* Opplest kilde: «Fra Lukas, kapittel 2, vers 1 til 20.» sies før hver historie og lesning */
+function spokenFrom(ref,l){
+  try{
+    l=l==='en'?'en':'no';
+    const m=String(ref||'').match(/^\s*([1-3]?[A-Za-zÆØÅæøå]+)\s+(\d+):(\d+)(?:-(\d+))?\s*$/); if(!m)return '';
+    const id=findBook(m[1]); const b=id&&BIDX&&BIDX.find(x=>x.id===id); if(!b)return '';
+    let nm=b[l]||''; if(!nm)return '';
+    nm=l==='en'?nm.replace(/^III /,'Third ').replace(/^II /,'Second ').replace(/^I /,'First '):nm.replace(/^1\. /,'Første ').replace(/^2\. /,'Andre ').replace(/^3\. /,'Tredje ');
+    const t=LN[l], v1=+m[3], v2=m[4]?+m[4]:v1, range=v2>v1;
+    return t.frm+' '+nm+', '+t.chap+' '+m[2]+', '+(range&&l==='en'?'verses':t.vers)+' '+v1+(range?' '+t.to+' '+v2:'')+'.';
+  }catch(e){return ''}
+}
+/* åpningen som leses opp først: tittel + hvor historien står i Bibelen */
+function storyIntro(title,ref,l,kind){
+  l=l==='en'?'en':'no'; const t=LN[l];
+  return (kind==='reading'?t.reading:t.story)+': '+String(title||'').replace(/[«»]/g,'')+'. '+spokenFrom(ref,l);
+}
+
 /* ---------- Innhold ---------- */
 function allItems(){
   const t=LN[lang], out={bible:[],guides:[],stories:[]};
   READINGS.forEach(r=>{
     const isNT=findBook(r.ref.split(' ')[0])>=47;
     const it={id:r.id,kind:'bible',title:r[lang],sub:lang==='no'?(isNT?r.ref:r.ref+' · '+t.aiTr):r.ref,lang:lang==='no'?'app':'en'};
-    it.text=async()=>{const L=await refTextL(r.ref); const no=(L.tr==='nb'||L.tr==='ai'); it.lang=no?'app':'en'; return [r[no?'no':'en'],...L.parts]};
+    it.text=async()=>{const L=await refTextL(r.ref); const no=(L.tr==='nb'||L.tr==='ai'); it.lang=no?'app':'en'; return [storyIntro(r[no?'no':'en'],r.ref,no?'no':'en','reading'),...L.parts]};
     out.bible.push(it);
   });
   GUIDES.forEach((G,gi)=>G.L.forEach((L,li)=>out.guides.push({id:'gd-'+gi+'-'+li,kind:'guides',series:G[lang],title:L[lang][0],sub:G[lang]+' · '+t.ep+' '+(li+1),lang:'app',text:()=>Promise.resolve(L[lang])})));
-  STORIES.forEach((S,i)=>out.stories.push({id:S.id,kind:'stories',title:t.stories[i],sub:S.ref,lang:'app',text:()=>Promise.resolve(S[lang])}));
+  STORIES.forEach((S,i)=>out.stories.push({id:S.id,kind:'stories',title:t.stories[i],sub:S.ref,lang:'app',text:()=>Promise.resolve([storyIntro(t.stories[i],S.ref,lang,'story'),...S[lang]])}));
   return out;
 }
 async function refTextL(ref,forceEn){
@@ -309,7 +331,9 @@ const MUS={
   on:store.get('cf_mon','1')==='1', sel:store.get('cf_msel','ambient'), vol:+store.get('cf_mvol','0.2'), tracks:[],
   ctx:null,master:null,oscs:[],audio:null,url:null,running:false,
   save(){store.set('cf_mon',this.on?'1':'0');store.set('cf_msel',this.sel);store.set('cf_mvol',String(this.vol))},
-  async load(){this.tracks=(await IDB.all()).map(t=>({id:t.id,name:t.name,blob:t.blob})); if(this.sel==='ambient'&&this.tracks.length&&store.get('cf_msel_user','0')!=='1'){this.sel=this.tracks[0].id;this.save()}},
+  editing:null,
+  async rename(id,name){name=String(name||'').trim().slice(0,80); if(!name)return; const t=(await IDB.all()).find(x=>x.id===id); if(!t)return; t.name=name; await IDB.put(t); await this.load()},
+  async load(){this.tracks=(await IDB.all()).map(t=>({id:t.id,name:t.name,blob:t.blob})).sort((a,b)=>String(a.name).localeCompare(String(b.name),undefined,{numeric:true,sensitivity:'base'})); if(this.sel==='ambient'&&this.tracks.length&&store.get('cf_msel_user','0')!=='1'){this.sel=this.tracks[0].id;this.save()}},
   start(){
     if(!this.on){this.stop();return}
     this.running=true;
@@ -359,8 +383,10 @@ const MUS={
   },
   stopFile(){if(this.audio){this.audio.pause();this.audio.removeAttribute('src');this.audio=null}this.fileGain=null;if(this.url){URL.revokeObjectURL(this.url);this.url=null}},
   async add(files){
-    for(const f of files){const id='m'+Date.now()+Math.random().toString(36).slice(2,6);const name=f.name.replace(/\.[^.]+$/,'');await IDB.put({id,name,blob:f});}
-    await this.load(); buildMusicPanel();
+    let first=null;
+    for(const f of files){const id='m'+Date.now()+Math.random().toString(36).slice(2,6);const name=f.name.replace(/\.[^.]+$/,'');await IDB.put({id,name,blob:f});if(!first)first=id}
+    await this.load(); if(files.length===1)this.editing=first;   // én fil: be om navn med en gang
+    buildMusicPanel();
   },
   async remove(id){await IDB.del(id);if(this.sel===id)this.sel='ambient';await this.load();this.save();if(!remixCurrent()&&this.running)this.start();buildMusicPanel()}
 };
@@ -469,13 +495,35 @@ function fillMusic(box){
   // Musikk
   const h=mk('div','h'); h.style.marginTop='16px'; h.appendChild(mk('span','',t.music)); const sw=mk('div','sw'+(MUS.on?' on':'')); sw.onclick=()=>{MUS.on=!MUS.on;MUS.save();if(!remixCurrent()){if(MUS.on&&TTS.playing)MUS.start();else MUS.stop()}buildMusicPanel()}; h.appendChild(sw); box.appendChild(h);
   const chips=mk('div','chips');
-  const chip=(label,val)=>{const b=mk('button',MUS.sel===val?'on':'',label);b.onclick=()=>{MUS.sel=val;store.set('cf_msel_user','1');MUS.save();if(!remixCurrent()){if(TTS.playing&&MUS.on){MUS.stop();MUS.start()}}buildMusicPanel()};return b};
+  const pick=val=>{MUS.sel=val;store.set('cf_msel_user','1');MUS.save();if(!remixCurrent()){if(TTS.playing&&MUS.on){MUS.stop();MUS.start()}}buildMusicPanel()};
+  const chip=(label,val)=>{const b=mk('button',MUS.sel===val?'on':'',label);b.onclick=()=>pick(val);return b};
   chips.appendChild(chip(t.ambient,'ambient'));
-  MUS.tracks.forEach(tr=>{chips.appendChild(chip(tr.name,tr.id))});
   if(MUS.tracks.length>1)chips.appendChild(chip(t.shuffle,'shuffle'));
   box.appendChild(chips);
   const v=mk('div','vol'); v.appendChild(mk('span','',t.vol)); const rg=mk('input'); rg.type='range'; rg.min='0'; rg.max='0.6'; rg.step='0.02'; rg.value=MUS.vol; rg.oninput=()=>MUS.setVol(+rg.value); rg.onchange=()=>remixCurrent(); v.appendChild(rg); box.appendChild(v);
-  MUS.tracks.forEach(tr=>{ if(MUS.sel===tr.id){const d=mk('button','addm','✕ '+tr.name);d.style.borderStyle='solid';d.style.borderColor='var(--line)';d.style.color='#C0392B';d.onclick=()=>MUS.remove(tr.id);box.appendChild(d)} });
+  if(MUS.tracks.length){
+    box.appendChild(mk('div','mlh',t.mylist));
+    const ul=mk('div','mlist');
+    MUS.tracks.forEach(tr=>{
+      const row=mk('div','mrow'+(MUS.sel===tr.id?' on':''));
+      if(MUS.editing===tr.id){
+        const inp=mk('input','mnm'); inp.type='text'; inp.value=tr.name; inp.placeholder=t.nameph; inp.maxLength=80;
+        const ok=mk('button','mb ok',t.save); ok.type='button'; const cn=mk('button','mb',t.cancel); cn.type='button';
+        const done=async()=>{const v=inp.value.trim(); MUS.editing=null; if(v&&v!==tr.name)await MUS.rename(tr.id,v); buildMusicPanel()};
+        ok.onclick=done; cn.onclick=()=>{MUS.editing=null;buildMusicPanel()};
+        inp.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();done()}else if(e.key==='Escape'){MUS.editing=null;buildMusicPanel()}};
+        row.append(inp,ok,cn);
+        setTimeout(()=>{if(inp.offsetParent){inp.focus();inp.select()}},30);
+      } else {
+        const nm=mk('button','nm',tr.name); nm.type='button'; nm.onclick=()=>pick(tr.id);
+        const ed=mk('button','mb','✎'); ed.type='button'; ed.title=t.rename; ed.setAttribute('aria-label',t.rename); ed.onclick=()=>{MUS.editing=tr.id;buildMusicPanel()};
+        const dl=mk('button','mb del','✕'); dl.type='button'; dl.onclick=()=>{if(confirm(t.delq+'\n'+tr.name))MUS.remove(tr.id)};
+        row.append(nm,ed,dl);
+      }
+      ul.appendChild(row);
+    });
+    box.appendChild(ul);
+  }
   const add=mk('label','addm',t.addm); const fi=mk('input'); fi.type='file'; fi.accept='audio/*,video/*'; fi.multiple=true; fi.style.display='none'; fi.onchange=()=>{if(fi.files.length)MUS.add([...fi.files])}; add.appendChild(fi); box.appendChild(add);
   box.appendChild(mk('div','mnote',t.mnote));
   if(!pickVoice(TTS.lang)&&speechSynthesis.getVoices().length)box.appendChild(mk('div','mnote',t.nov));

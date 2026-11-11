@@ -34,7 +34,7 @@ async function getDaily(type){
 }
 function genItem(e){
   const t=DN[lang]; const id='gen-'+e.type+'-'+e.date+'-'+e.lang;
-  return {id,kind:e.type==='story'?'stories':'guides',title:e.title,sub:t.ai+' · '+e.date+(e.ref?' · '+e.ref:''),lang:'app',text:()=>Promise.resolve([e.title,...e.body]),gen:e};
+  return {id,kind:e.type==='story'?'stories':'guides',title:e.title,sub:t.ai+' · '+e.date+(e.ref?' · '+e.ref:''),lang:'app',text:()=>Promise.resolve([e.type==='story'?storyIntro(e.title,e.ref,e.lang||lang,'story'):e.title,...e.body]),gen:e};
 }
 function genArchive(type){return Object.values(genStore()).filter(e=>e.type===type&&e.lang===lang).sort((a,b)=>b.date.localeCompare(a.date))}
 function genHero(type,alt){
