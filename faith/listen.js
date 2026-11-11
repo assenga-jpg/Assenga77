@@ -6,7 +6,7 @@ const LN={
      speed:"Hastighet",music:"Bakgrunnsmusikk",ambient:"Rolig ambient",shuffle:"Tilfeldig",addm:"+ Legg til egen musikk",
      mnote:"Musikken du legger til lagres bare på denne enheten og lastes aldri opp. Du kan velge lydfiler eller videoer, og appen spiller bare lyden.",
      vol:"Volum",next:"Neste",fav:"Favoritt",nov:"Fant ingen stemme på denne enheten for dette språket. Lyden bruker enhetens standardstemme.",nowp:"Spiller nå",
-     audio:"Lyd og musikk",audioSub:"Legg til din egen musikk, velg stemme",loadingAudio:"Lager lyd …",voice:"Stemme",vEn:"Engelsk stemme",vNo:"Norsk stemme",auto:"Automatisk",try:"Prøv",
+     audio:"Lyd og musikk",audioSub:"Legg til din egen musikk, velg stemme",loadingAudio:"Lager lyd …",vAI:"AI-stemme",vDev:"enhetens stemme",voice:"Stemme",vEn:"Engelsk stemme",vNo:"Norsk stemme",auto:"Automatisk",try:"Prøv",
      tryEn:"The Lord is my shepherd; I shall not want.",tryNo:"Herren er min hyrde, jeg mangler ingenting.",
      vhint:"Tips: på iPhone kan du laste ned bedre stemmer under Innstillinger › Tilgjengelighet › Opplest innhold › Stemmer. Velg for eksempel engelsk (Storbritannia) og en utvidet eller premium-stemme. Den dukker opp i listen her.",
      stories:["Natten i Betlehem","Veien til Damaskus","Den barmhjertige samaritan"]},
@@ -16,7 +16,7 @@ const LN={
      speed:"Speed",music:"Background music",ambient:"Calm ambient",shuffle:"Shuffle",addm:"+ Add your own music",
      mnote:"Music you add is stored only on this device and is never uploaded. You can pick audio files or videos; the app plays just the sound.",
      vol:"Volume",next:"Next",fav:"Favorite",nov:"No voice found on this device for this language. Audio uses the device's default voice.",nowp:"Now playing",
-     audio:"Audio and music",audioSub:"Add your own music, choose a voice",loadingAudio:"Preparing audio …",voice:"Voice",vEn:"English voice",vNo:"Norwegian voice",auto:"Automatic",try:"Try",
+     audio:"Audio and music",audioSub:"Add your own music, choose a voice",loadingAudio:"Preparing audio …",vAI:"AI voice",vDev:"device voice",voice:"Voice",vEn:"English voice",vNo:"Norwegian voice",auto:"Automatic",try:"Try",
      tryEn:"The Lord is my shepherd; I shall not want.",tryNo:"Herren er min hyrde, jeg mangler ingenting.",
      vhint:"Tip: on iPhone you can download better voices under Settings › Accessibility › Spoken Content › Voices. Pick for example English (UK) and an enhanced or premium voice. It will show up in the list here.",
      stories:["The night in Bethlehem","The road to Damascus","The Good Samaritan"]}
@@ -437,6 +437,7 @@ function uiTick(){
   try{if('mediaSession' in navigator)navigator.mediaSession.playbackState=TTS.playing?'playing':'paused'}catch(e){}
   const m=$('#mini'); if(m){m.querySelector('.t').textContent=it.title;m.querySelector('.pb').textContent=TTS.loading?'…':(TTS.playing?'❚❚':'▶');m.querySelector('.pr').style.width=pct+'%'}
   const pl=$('#pPlay'); if(pl){
+    const sb=$('#pSub'); if(sb&&!TTS.loading)sb.textContent=it.sub+' · '+(TTS.mode==='audio'?t.vAI:t.vDev);
     pl.textContent=TTS.loading?'…':(TTS.playing?'❚❚':'▶'); $('#pLine').textContent=TTS.loading?t.loadingAudio:lineAt(); $('#pSpd').textContent=TTS.speed+'×'; $('#pArt').classList.toggle('pulse',TTS.playing);
     const sk=$('#pSeek'); if(sk&&!TTS.drag){sk.value=Math.round(fr*1000); sk.style.setProperty('--p',pct+'%'); $('#pCur').textContent=fmtT(curPos()); $('#pDur').textContent=(TTS.mode==='audio'?'':'≈')+fmtT(curDur())}
     const f=$('#pFav'); if(f){const on=favs().includes(it.id);f.textContent=on?'♥':'♡';f.style.color=on?'#C0392B':''}}
