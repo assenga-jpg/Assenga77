@@ -98,7 +98,7 @@ function pickVoice(l){
   return no.find(v=>/henrik|finn|male|mann/i.test(v.name))||no[0]||null;
 }
 /* tid og fremdrift (like for lydfil og enhetsstemme) */
-const baseRate=()=>TTS.lang==='en'?0.8:1;   // AI-stemmen leser fort, så vi tar den litt roligere
+const baseRate=()=>1;   // Azure-stemmen leser i naturlig tempo   // AI-stemmen leser fort, så vi tar den litt roligere
 function wordsPerSec(){return 2.3*TTS.speed}
 function secsOf(i0,i1){let w=0;for(let k=i0;k<i1&&k<TTS.chunks.length;k++)w+=TTS.chunks[k].split(/\s+/).length;return w/wordsPerSec()}
 function curPos(){return TTS.mode==='audio'&&TTS.el?(TTS.el.currentTime||0):secsOf(0,TTS.i)}
@@ -480,7 +480,7 @@ function fillMusic(box){
   if(!pickVoice(TTS.lang)&&speechSynthesis.getVoices().length)box.appendChild(mk('div','mnote',t.nov));
   const qn=mk('div','mnote',''); box.appendChild(qn);
   fetch(WORKER_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quota:1})}).then(r=>r.json()).then(q=>{
-    if(q&&q.azure)qn.textContent=(lang==='no'?'Engelsk AI-stemme denne måneden: ':'English AI voice this month: ')+Math.round(q.used/1000)+' / '+Math.round(q.limit/1000)+(lang==='no'?' tusen tegn brukt. Når den er full, bruker appen en gratis reservestemme.':' thousand characters used. When full, the app uses a free backup voice.');
+    if(q&&q.azure)qn.textContent=(lang==='no'?'AI-stemme denne måneden: ':'AI voice this month: ')+Math.round(q.used/1000)+' / '+Math.round(q.limit/1000)+(lang==='no'?' tusen tegn brukt. Når den er full, bruker appen telefonens stemme.':' thousand characters used. When full, the app uses the built-in phone voice.');
   }).catch(()=>{});
 }
 /* Start */
