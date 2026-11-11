@@ -67,3 +67,11 @@ body.chatting #mini{display:none}
 .vol input{flex:1;accent-color:var(--gold)}
 .addm{display:block;width:100%;margin-top:10px;padding:12px;border-radius:14px;border:1px dashed var(--gold);color:var(--ink);font-size:14px;font-weight:500;text-align:center}
 .mnote{font-size:11px;color:var(--ink-soft);margin-top:8px;line-height:1.45}
+.qcard{margin-top:12px;padding:14px 16px;border-radius:20px;background:rgba(255,253,248,.9);border:1px solid var(--line)}
+.qcard .qtop{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;font-weight:600}
+.qcard .qtop b{font-size:13px;color:var(--gold)}
+.qcard .qbar{height:8px;border-radius:999px;background:var(--line);margin:10px 0 10px;overflow:hidden}
+.qcard .qbar i{display:block;height:100%;border-radius:999px;background:var(--gold);transition:width .6s var(--ease)}
+.qcard.mid .qbar i{background:#D08A2E}.qcard.hi .qbar i{background:#C0392B}.qcard.hi .qtop b{color:#C0392B}
+.qcard .qnum{font-size:13px;color:var(--ink-soft)}.qcard .qnum b{font-size:22px;font-weight:600;color:var(--ink);letter-spacing:-.01em}
+.qcard .qsub{font-size:11px;color:var(--ink-soft);margin-top:6px;line-height:1.45}

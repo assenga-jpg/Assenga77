@@ -122,7 +122,7 @@ async function getVoiceBlob(text,l){
   const r=await fetch(WORKER_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tts:1,lang:l,text})});
   if(!r.ok){let e='fail';try{e=(await r.json()).error}catch(x){}throw new Error(e)}
   const b=await r.blob(); if(b.size<500)throw new Error('empty');
-  await KV.set(key,b);
+  await KV.set(key,b); try{qRefresh()}catch(e){}
   try{const ks=jget('cf_ttskeys',[]).filter(x=>x!==key);ks.push(key);while(ks.length>18){const old=ks.shift();await KV.set(old,undefined)}store.set('cf_ttskeys',JSON.stringify(ks))}catch(e){}
   return b;
 }
@@ -385,6 +385,7 @@ function renderListen(){
   // fortsett
   const rs=jget('cf_resume',null), ri=rs&&[...ALL,...(typeof genArchive==='function'?[...genArchive('story'),...genArchive('lesson')].map(genItem):[])].find(x=>x.id===rs.id);
   if(ri&&rs.f>0.02){const r=mk('button','hero alt'); const rx=mk('div'); rx.appendChild(mk('small','',t.resume)); rx.appendChild(mk('b','',ri.title)); r.appendChild(rx); r.appendChild(mk('div','pl','▶')); r.onclick=()=>startItem(ri,A[ri.kind]||[ri],rs.f); w.appendChild(r)}
+  w.appendChild(qCardEl());
   // Lyd og musikk (åpne/lukk)
   const mo=store.get('cf_musopen','0')==='1';
   const mb=mk('button','row2'); mb.appendChild(mk('div','ic','♪')); const mtx=mk('div','tx'); mtx.appendChild(mk('b','',t.audio)); mtx.appendChild(mk('small','',t.audioSub)); mb.appendChild(mtx); mb.appendChild(mk('span','fav',mo?'⌃':'⌄'));
@@ -478,11 +479,32 @@ function fillMusic(box){
   const add=mk('label','addm',t.addm); const fi=mk('input'); fi.type='file'; fi.accept='audio/*,video/*'; fi.multiple=true; fi.style.display='none'; fi.onchange=()=>{if(fi.files.length)MUS.add([...fi.files])}; add.appendChild(fi); box.appendChild(add);
   box.appendChild(mk('div','mnote',t.mnote));
   if(!pickVoice(TTS.lang)&&speechSynthesis.getVoices().length)box.appendChild(mk('div','mnote',t.nov));
-  const qn=mk('div','mnote',''); box.appendChild(qn);
+  if(box.id==='pMus')box.appendChild(qCardEl());
+}
+/* Teller: hvor mye AI-stemme er brukt denne måneden (serveren teller tegn) */
+const Q=Object.assign({used:null,limit:400000,azure:false},jget('cf_q',{}));
+const qNum=n=>Math.round(n).toLocaleString(lang==='no'?'nb-NO':'en-GB');
+function qPaint(){
+  document.querySelectorAll('.qcard').forEach(c=>{
+    if(Q.used==null||!Q.azure){c.style.display='none';return}
+    c.style.display=''; const no=lang==='no', p=Math.min(100,Q.used/Q.limit*100), full=Q.used>=Q.limit*0.97;
+    const nx=new Date(Date.UTC(new Date().getUTCFullYear(),new Date().getUTCMonth()+1,1)).toLocaleDateString(no?'nb-NO':'en-GB',{day:'numeric',month:'long',timeZone:'UTC'});
+    c.className='qcard'+(p>=90?' hi':p>=70?' mid':''); c.innerHTML='';
+    const top=mk('div','qtop'); top.appendChild(mk('span','',no?'AI-stemme denne måneden':'AI voice this month')); top.appendChild(mk('b','',(p<10?p.toFixed(1):Math.round(p))+' %')); c.appendChild(top);
+    const bar=mk('div','qbar'); const fill=mk('i'); fill.style.width=Math.max(p,0.8)+'%'; bar.appendChild(fill); c.appendChild(bar);
+    const nums=mk('div','qnum'); nums.appendChild(mk('b','',qNum(Q.used))); nums.appendChild(mk('span','',' / '+qNum(Q.limit)+(no?' tegn':' characters'))); c.appendChild(nums);
+    c.appendChild(mk('div','qsub',(no?'≈ ':'≈ ')+qNum(Q.used/6)+(no?' av ca. ':' of about ')+qNum(Q.limit/6)+(no?' ord. Tellingen er i tegn (bokstaver og mellomrom), ca. 6 tegn per ord.':' words. Counted in characters (letters and spaces), about 6 per word.')));
+    c.appendChild(mk('div','qsub',full
+      ?(no?'Fullt for denne måneden. Appen bruker telefonens stemme til '+nx+'.':'Full for this month. The app uses the built-in phone voice until '+nx+'.')
+      :(no?'Nullstilles '+nx+'. Er den full før det, bruker appen telefonens stemme.':'Resets '+nx+'. If it fills up before then, the app uses the built-in phone voice.')));
+  });
+}
+function qRefresh(){
   fetch(WORKER_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quota:1})}).then(r=>r.json()).then(q=>{
-    if(q&&q.azure)qn.textContent=(lang==='no'?'AI-stemme denne måneden: ':'AI voice this month: ')+Math.round(q.used/1000)+' / '+Math.round(q.limit/1000)+(lang==='no'?' tusen tegn brukt. Når den er full, bruker appen telefonens stemme.':' thousand characters used. When full, the app uses the built-in phone voice.');
+    if(q&&typeof q.used==='number'){Q.used=q.used;Q.limit=q.limit||Q.limit;Q.azure=!!q.azure;store.set('cf_q',JSON.stringify(Q));qPaint()}
   }).catch(()=>{});
 }
+function qCardEl(){const c=mk('div','qcard');qPaint();setTimeout(()=>{qPaint();qRefresh()},0);return c}
 /* Start */
 if('speechSynthesis' in window){speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=()=>{try{buildMusicPanel()}catch(e){}}}
 /* Lås opp lyd ved første trykk (iPhone krever det) */
