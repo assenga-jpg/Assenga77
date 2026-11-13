@@ -442,11 +442,23 @@ async function adtsHead(blob,secs){
   return p>0&&p<buf.length?new Blob([buf.subarray(0,p)],{type:'audio/aac'}):blob;
 }
 
+/* hjelpere for lagring */
+async function storInfo(){try{const e=await navigator.storage.estimate();return Math.round(e.usage/1e6)+' MB / '+Math.round(e.quota/1e6)+' MB'}catch(x){return '?'}}
+async function freeTtsCache(){   // stemmefilene kan lages på nytt, så de kan fjernes for å få plass
+  const ks=jget('cf_ttskeys',[]); for(const k of ks){try{await KV.set(k,undefined)}catch(e){}} store.set('cf_ttskeys','[]');
+}
+try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}
+
 /* ---------- Musikk: ambient (laget i appen) + egne filer (kun på enheten) ---------- */
 const IDB={
   db:null,
   open(){return this.db?Promise.resolve(this.db):new Promise((res,rej)=>{const r=indexedDB.open('cf_music',1);r.onupgradeneeded=()=>r.result.createObjectStore('tracks',{keyPath:'id'});r.onsuccess=()=>{this.db=r.result;res(r.result)};r.onerror=()=>rej(r.error)})},
-  async all(){try{const d=await this.open();return await new Promise(res=>{const q=d.transaction('tracks').objectStore('tracks').getAll();q.onsuccess=()=>res(q.result||[]);q.onerror=()=>res([])})}catch(e){return []}},
+  async all(){try{const d=await this.open();return await new Promise(res=>{const out=[];const q=d.transaction('tracks').objectStore('tracks').openCursor();q.onsuccess=()=>{const c=q.result;if(c){out.push(c.value);c.continue()}else res(out)};q.onerror=()=>res(out)})}catch(e){return []}},
+  /* Safari kan nekte å lagre en Blob/File i IndexedDB. Da lagrer vi i stedet selve bytene (ArrayBuffer). */
+  async putSafe(t){
+    try{await this.put(t);return}
+    catch(e1){ if(t.data||!t.blob)throw e1; const ab=await t.blob.arrayBuffer(); await this.put({id:t.id,name:t.name,type:t.blob.type||'audio/mpeg',data:ab}) }
+  },
   async put(t){const d=await this.open();return new Promise((res,rej)=>{const q=d.transaction('tracks','readwrite').objectStore('tracks').put(t);q.onsuccess=()=>res();q.onerror=()=>rej(q.error)})},
   async del(id){const d=await this.open();return new Promise(res=>{const q=d.transaction('tracks','readwrite').objectStore('tracks').delete(id);q.onsuccess=()=>res();q.onerror=()=>res()})}
 };
@@ -454,9 +466,19 @@ const MUS={
   on:store.get('cf_mon','1')==='1', sel:store.get('cf_msel','ambient'), vol:+store.get('cf_mvol','0.2'), tracks:[],
   ctx:null,master:null,oscs:[],audio:null,url:null,running:false,
   save(){store.set('cf_mon',this.on?'1':'0');store.set('cf_msel',this.sel);store.set('cf_mvol',String(this.vol))},
+  /* gamle, store videofiler (lagt inn før) gjøres om til små lydfiler, så lagringen ikke blir full */
+  async migrate(){
+    if(this._mig)return; this._mig=true; let changed=0;
+    for(const t of [...this.tracks]){
+      const big=t.blob.size>15e6, vid=/^video\//i.test(t.blob.type);
+      if(!(big||vid))continue;
+      try{ const x=await extractAac(t.blob); if(x&&x.size>2000&&x.size<t.blob.size){ await IDB.del(t.id); await IDB.putSafe({id:t.id,name:t.name,blob:x}); changed++ } }catch(e){}
+    }
+    if(changed){await this.load();buildMusicPanel()}
+  },
   editing:null,
-  async rename(id,name){name=String(name||'').trim().slice(0,80); if(!name)return; const t=(await IDB.all()).find(x=>x.id===id); if(!t)return; t.name=name; await IDB.put(t); await this.load()},
-  async load(){this.tracks=(await IDB.all()).map(t=>({id:t.id,name:t.name,blob:t.blob})).sort((a,b)=>String(a.name).localeCompare(String(b.name),undefined,{numeric:true,sensitivity:'base'})); if(this.sel==='ambient'&&this.tracks.length&&store.get('cf_msel_user','0')!=='1'){this.sel=this.tracks[0].id;this.save()}},
+  async rename(id,name){name=String(name||'').trim().slice(0,80); if(!name)return; const t=(await IDB.all()).find(x=>x.id===id); if(!t)return; t.name=name; await IDB.putSafe(t.blob?t:{id:t.id,name:t.name,type:t.type,data:t.data,blob:null}); await this.load()},
+  async load(){this.tracks=(await IDB.all()).map(t=>({id:t.id,name:t.name,blob:t.blob||new Blob([t.data],{type:t.type||'audio/mpeg'})})).sort((a,b)=>String(a.name).localeCompare(String(b.name),undefined,{numeric:true,sensitivity:'base'})); if(this.sel==='ambient'&&this.tracks.length&&store.get('cf_msel_user','0')!=='1'){this.sel=this.tracks[0].id;this.save()}},
   start(){
     if(!this.on){this.stop();return}
     if(this.pv.id)this.stopPreview();
@@ -516,7 +538,16 @@ const MUS={
         try{toast(no?'Henter lyden ut av videoen …':'Getting the sound out of the video …')}catch(e){}
         try{const x=await extractAac(f); if(x&&x.size>2000)blob=x}catch(e){}
       }
-      try{await IDB.put({id,name,blob})}catch(e){try{toast(no?'Fikk ikke lagret filen (lite plass på telefonen?).':'Could not save the file (low storage?).')}catch(x){} continue}
+      let saved=false, err=null;
+      for(let attempt=0;attempt<2&&!saved;attempt++){
+        try{await IDB.putSafe({id,name,blob});saved=true}
+        catch(e){ err=e; if(attempt===0){try{await freeTtsCache()}catch(x){}} }
+      }
+      if(!saved){
+        const info=await storInfo(); const en=err&&err.name?err.name:'error';
+        try{toast((no?'Fikk ikke lagret «'+name+'» ('+en+'). Lagring: ':'Could not save “'+name+'” ('+en+'). Storage: ')+info)}catch(x){}
+        continue;
+      }
       if(!first)first=id;
     }
     await this.load(); if(files.length===1&&first)this.editing=first;   // én fil: be om navn med en gang
@@ -549,7 +580,7 @@ const MUS={
     if(this.durs[tr.id]||this.bad[tr.id]||this.chk[tr.id])return; this.chk[tr.id]=1;
     try{
       const url=URL.createObjectURL(tr.blob), a=new Audio(); a.preload='metadata';
-      const fin=()=>{URL.revokeObjectURL(url);document.querySelectorAll('[data-td="'+tr.id+'"]').forEach(e=>{const d=this.durs[tr.id];e.textContent=d?fmtT(d):'⚠';e.classList.toggle('bad',!d)})};
+      const fin=()=>{URL.revokeObjectURL(url);document.querySelectorAll('[data-td="'+tr.id+'"]').forEach(e=>{const d=this.durs[tr.id];e.textContent=(d?fmtT(d):'⚠')+(e.dataset.sz||'');e.classList.toggle('bad',!d)})};
       a.onloadedmetadata=()=>{this.durs[tr.id]=isFinite(a.duration)?a.duration:0;if(!this.durs[tr.id])this.bad[tr.id]=1;fin()};
       a.onerror=()=>{this.bad[tr.id]=1;fin()};
       a.src=url;
@@ -557,7 +588,7 @@ const MUS={
   },
   async remove(id){await IDB.del(id);if(this.sel===id)this.sel='ambient';await this.load();this.save();if(!remixCurrent()&&this.running)this.start();buildMusicPanel()}
 };
-MUS.load();
+MUS.load().then(()=>MUS.migrate()).catch(()=>{});
 
 /* ---------- Visning ---------- */
 let lt='bible';
@@ -685,7 +716,7 @@ function fillMusic(box){
     }
     const nm=mk('button','nm',name); nm.type='button'; nm.onclick=()=>pick(id); row.appendChild(nm);
     if(own){
-      const td=mk('span','td'+(MUS.bad[id]?' bad':'')); td.dataset.td=id; const d=MUS.durs[id]; td.textContent=MUS.bad[id]?'⚠':(d?fmtT(d):''); row.appendChild(td);
+      const td=mk('span','td'+(MUS.bad[id]?' bad':'')); td.dataset.td=id; const d=MUS.durs[id]; const mbs=tr.blob.size/1e6, sz=mbs>=8?' · '+Math.round(mbs)+' MB':''; td.dataset.sz=sz; td.textContent=MUS.bad[id]?'⚠':((d?fmtT(d):'')+sz); row.appendChild(td);
       const ed=mk('button','mb','✎'); ed.type='button'; ed.title=t.rename; ed.setAttribute('aria-label',t.rename); ed.onclick=()=>{MUS.editing=id;buildMusicPanel()};
       const dl=mk('button','mb del','✕'); dl.type='button'; dl.onclick=()=>{if(confirm(t.delq+'\n'+tr.name)){MUS.stopPreview();MUS.remove(id)}};
       row.append(ed,dl); MUS.checkDur(tr);
@@ -700,6 +731,7 @@ function fillMusic(box){
   const v=mk('div','vol'); v.style.marginTop='12px'; v.appendChild(mk('span','',t.vol)); const rg=mk('input'); rg.type='range'; rg.min='0'; rg.max='0.6'; rg.step='0.02'; rg.value=MUS.vol; rg.oninput=()=>MUS.setVol(+rg.value); rg.onchange=()=>remixCurrent(); v.appendChild(rg); box.appendChild(v);
   const add=mk('label','addm',t.addm); const fi=mk('input'); fi.type='file'; fi.accept='audio/*,video/*'; fi.multiple=true; fi.style.display='none'; fi.onchange=()=>{if(fi.files.length)MUS.add([...fi.files])}; add.appendChild(fi); box.appendChild(add);
   box.appendChild(mk('div','mnote',t.mnote));
+  { const si=mk('div','mnote'); box.appendChild(si); storInfo().then(x=>{si.textContent=(lang==='no'?'Lagring brukt i appen: ':'Storage used by the app: ')+x}) }
   if(!pickVoice(TTS.lang)&&speechSynthesis.getVoices().length)box.appendChild(mk('div','mnote',t.nov));
   if(box.id==='pMus')box.appendChild(qCardEl());
 }
