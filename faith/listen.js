@@ -5,7 +5,7 @@ const LN={
      noFav:"Ingen favoritter ennå. Trykk på hjertet ved noe du vil lagre.",ep:"Del",
      speed:"Hastighet",music:"Bakgrunnsmusikk",ambient:"Rolig ambient",shuffle:"Tilfeldig",addm:"+ Legg til egen musikk",
      mnote:"Musikken du legger til lagres bare på denne enheten og lastes aldri opp. Du kan velge lydfiler eller videoer, og appen spiller bare lyden.",
-     mylist:"Min musikk",rename:"Gi nytt navn",save:"Lagre",cancel:"Avbryt",delq:"Slette denne lydfilen fra appen?",nameph:"Navn på lydfilen",
+     prev:"Prøv avspilling",badnote:"⚠ Telefonen klarer ikke å spille denne filen. Prøv en lydfil (mp3 eller m4a), eller en video med lyd.",mylist:"Min musikk",rename:"Gi nytt navn",save:"Lagre",cancel:"Avbryt",delq:"Slette denne lydfilen fra appen?",nameph:"Navn på lydfilen",
      frm:"Fra",chap:"kapittel",vers:"vers",to:"til",story:"Historien",reading:"Lesning",
      vol:"Volum",next:"Neste",fav:"Favoritt",nov:"Fant ingen stemme på denne enheten for dette språket. Lyden bruker enhetens standardstemme.",nowp:"Spiller nå",
      audio:"Lyd og musikk",audioSub:"Legg til din egen musikk, velg stemme",loadingAudio:"Lager lyd …",vAI:"AI-stemme",vDev:"enhetens stemme",voice:"Stemme",vEn:"Engelsk stemme",vNo:"Norsk stemme",auto:"Automatisk",try:"Prøv",
@@ -17,7 +17,7 @@ const LN={
      noFav:"No favorites yet. Tap the heart on anything you want to keep.",ep:"Part",
      speed:"Speed",music:"Background music",ambient:"Calm ambient",shuffle:"Shuffle",addm:"+ Add your own music",
      mnote:"Music you add is stored only on this device and is never uploaded. You can pick audio files or videos; the app plays just the sound.",
-     mylist:"My music",rename:"Rename",save:"Save",cancel:"Cancel",delq:"Delete this audio file from the app?",nameph:"Name of the file",
+     prev:"Try playing it",badnote:"⚠ The phone cannot play this file. Try an audio file (mp3 or m4a), or a video with sound.",mylist:"My music",rename:"Rename",save:"Save",cancel:"Cancel",delq:"Delete this audio file from the app?",nameph:"Name of the file",
      frm:"From",chap:"chapter",vers:"verse",to:"to",story:"The story",reading:"Reading",
      vol:"Volume",next:"Next",fav:"Favorite",nov:"No voice found on this device for this language. Audio uses the device's default voice.",nowp:"Now playing",
      audio:"Audio and music",audioSub:"Add your own music, choose a voice",loadingAudio:"Preparing audio …",vAI:"AI voice",vDev:"device voice",voice:"Voice",vEn:"English voice",vNo:"Norwegian voice",auto:"Automatic",try:"Try",
@@ -235,18 +235,26 @@ async function mixVoiceMusic(voiceBlob){
       mg.gain.value=MUS.vol*1.4;
     } else {
       let order=sel==='shuffle'?[...mine].sort(()=>Math.random()-.5):[mine.find(t=>t.id===sel)];
-      let t0=0, guard=0;
+      let t0=0, guard=0, placed=0; const dcache=new Map();
       while(t0<total&&guard++<12){
+        const before=placed;
         for(const tr of order){
           if(t0>=total)break;
-          let mb; try{mb=await decodeBlobTmp(tmp,tr.blob)}catch(e){continue}
+          if(!tr)continue;
+          let mb=dcache.get(tr.id);
+          if(!mb){
+            try{ const src0=tr.blob.type==='audio/aac'?await adtsHead(tr.blob,total+3):tr.blob; mb=await decodeBlobTmp(tmp,src0); dcache.set(tr.id,mb) }
+            catch(e){ try{MUS.bad[tr.id]=1}catch(x){} continue }
+          }
+          placed++;
           const src=off.createBufferSource(); src.buffer=mb; const g=off.createGain(); src.connect(g); g.connect(mg);
           const dur=Math.min(mb.duration,total-t0), fade=Math.min(1.5,dur/3);
           g.gain.setValueAtTime(0,t0); g.gain.linearRampToValueAtTime(1,t0+fade); g.gain.setValueAtTime(1,Math.max(t0+fade,t0+dur-fade)); g.gain.linearRampToValueAtTime(0,t0+dur);
           src.start(t0,0,dur); t0+=Math.max(0.5,dur-0.5);
         }
-        if(!order.length)break;
+        if(!order.length||placed===before)break;
       }
+      if(!placed)return null;   // telefonen klarte ikke å lese sangen: spill den ved siden av stemmen i stedet (reserve)
     }
     const out=await off.startRendering();
     return encodeWav(out);
@@ -290,6 +298,7 @@ async function startItem(item,queue,at,auto){
     TTS.tok++; try{speechSynthesis.cancel()}catch(e){} const a=TTS.el; if(TTS.url){URL.revokeObjectURL(TTS.url);TTS.url=null}
     TTS.keep=true; a.loop=true; a.src=silentUrl(); a.play().catch(()=>{});
   } else { unlockVoice(); stopVoice(); }
+  try{MUS.stopPreview()}catch(e){}
   const my=TTS.tok;
   TTS.queue=queue||[item]; TTS.qi=Math.max(0,TTS.queue.findIndex(x=>x.id===item.id)); TTS.item=item; TTS.playing=false; TTS.loading=true; TTS.chunks=[]; TTS.i=0; TTS.mode='audio'; TTS.dur=0; TTS.mixed=false; TTS.voiceBlob=null;
   buildPlayer(); showMini(); renderListen(); try{MUS.pause()}catch(e){}
@@ -357,6 +366,82 @@ function setMedia(){
   }catch(e){}
 }
 
+/* ---------- Hent lyden ut av en video (mp4/mov) uten å laste hele filen i minnet ----------
+   En video fra CapCut kan være flere hundre MB. Vi leser bare lydsporet (AAC) og lagrer det som en liten lydfil. */
+async function extractAac(file){
+  const rd=async(a,b)=>new Uint8Array(await file.slice(a,b).arrayBuffer());
+  const u32=(d,o)=>(d[o]*16777216)+((d[o+1]<<16)|(d[o+2]<<8)|d[o+3]);
+  const u64=(d,o)=>u32(d,o)*4294967296+u32(d,o+4);
+  const t4=(d,o)=>String.fromCharCode(d[o],d[o+1],d[o+2],d[o+3]);
+  const boxes=(d,s,e)=>{const out=[];while(s+8<=e){let sz=u32(d,s),ty=t4(d,s+4),hl=8;if(sz===1){sz=u64(d,s+8);hl=16}else if(sz===0)sz=e-s;if(sz<hl||s+sz>e)break;out.push({ty,s:s+hl,e:s+sz});s+=sz}return out};
+  const sub=(d,b,ty)=>boxes(d,b.s,b.e).filter(x=>x.ty===ty);
+  // 1) finn moov (kan ligge først eller sist i filen)
+  let pos=0,moov=null; const size=file.size;
+  while(pos+8<=size){
+    const h=await rd(pos,Math.min(size,pos+16)); let sz=u32(h,0),hl=8; const ty=t4(h,4);
+    if(sz===1){sz=u64(h,8);hl=16}else if(sz===0)sz=size-pos;
+    if(sz<hl)break;
+    if(ty==='moov'){moov=await rd(pos+hl,pos+sz);break}
+    pos+=sz;
+  }
+  if(!moov)return null;
+  const root={s:0,e:moov.length};
+  // 2) finn lydsporet
+  let st=null;
+  for(const tr of sub(moov,root,'trak')){
+    const mdia=sub(moov,tr,'mdia')[0]; if(!mdia)continue;
+    const hd=sub(moov,mdia,'hdlr')[0]; if(!hd||t4(moov,hd.s+8)!=='soun')continue;
+    const minf=sub(moov,mdia,'minf')[0]; const stbl=minf&&sub(moov,minf,'stbl')[0]; if(stbl){st=stbl;break}
+  }
+  if(!st)return null;
+  const g=ty=>sub(moov,st,ty)[0];
+  const stsd=g('stsd'),stsz=g('stsz'),stsc=g('stsc'),stco=g('stco')||g('co64'); if(!stsd||!stsz||!stsc||!stco)return null;
+  // 3) AAC-oppsett fra esds
+  let ei=-1; for(let i=stsd.s;i<stsd.e-4;i++){if(moov[i]===0x65&&moov[i+1]===0x73&&moov[i+2]===0x64&&moov[i+3]===0x73){ei=i;break}}
+  if(ei<0||t4(moov,stsd.s+12)!=='mp4a')return null;
+  let p=ei+8; const tagLen=()=>{let l=0;for(let i=0;i<4;i++){const b=moov[p++];l=(l<<7)|(b&0x7f);if(!(b&0x80))break}return l};
+  if(moov[p]!==0x03)return null; p++; tagLen(); p+=2; const fl=moov[p++]; if(fl&0x80)p+=2; if(fl&0x40)p+=1+moov[p]; if(fl&0x20)p+=2;
+  if(moov[p]!==0x04)return null; p++; tagLen(); if(moov[p]!==0x40)return null; p+=13;
+  if(moov[p]!==0x05)return null; p++; const al=tagLen(); const asc=moov.subarray(p,p+al);
+  const ot=asc[0]>>3, fi=((asc[0]&7)<<1)|(asc[1]>>7), ch=(asc[1]>>3)&15;
+  if(ot<1||ot>4||fi>12||ch<1||ch>7)return null;
+  // 4) tabellene som sier hvor lydbitene ligger
+  const nS=u32(moov,stsz.s+8), cs=u32(moov,stsz.s+4); const sizes=new Array(nS);
+  for(let i=0;i<nS;i++)sizes[i]=cs||u32(moov,stsz.s+12+i*4);
+  const nC=u32(moov,stco.s+4), is64=t4(moov,stco.s-4)==='co64'; const offs=new Array(nC);
+  for(let i=0;i<nC;i++)offs[i]=is64?u64(moov,stco.s+8+i*8):u32(moov,stco.s+8+i*4);
+  const nR=u32(moov,stsc.s+4), runs=[]; for(let i=0;i<nR;i++)runs.push([u32(moov,stsc.s+8+i*12),u32(moov,stsc.s+12+i*12)]);
+  if(!nS||!nC||!runs.length)return null;
+  // 5) les lyd-bitene og pakk dem som ADTS (vanlig .aac-fil)
+  const parts=[]; let si=0;
+  for(let c=0;c<nC&&si<nS;c++){
+    let per=runs[0][1]; for(const r of runs){if(r[0]<=c+1)per=r[1]}
+    const n=Math.min(per,nS-si); let len=0; for(let k=0;k<n;k++)len+=sizes[si+k];
+    if(!len){si+=n;continue}
+    const raw=await rd(offs[c],offs[c]+len); let o=0;
+    for(let k=0;k<n;k++){
+      const sz=sizes[si+k], fl2=sz+7, h=new Uint8Array(7);
+      h[0]=0xFF;h[1]=0xF1;h[2]=((ot-1)<<6)|(fi<<2)|((ch>>2)&1);h[3]=((ch&3)<<6)|((fl2>>11)&3);h[4]=(fl2>>3)&0xFF;h[5]=((fl2&7)<<5)|0x1F;h[6]=0xFC;
+      parts.push(h,raw.subarray(o,o+sz)); o+=sz;
+    }
+    si+=n;
+  }
+  if(si<10)return null;
+  return new Blob(parts,{type:'audio/aac'});
+}
+/* kutt en ADTS-lydfil etter et antall sekunder (så vi ikke dekoder mer enn vi trenger) */
+async function adtsHead(blob,secs){
+  const buf=new Uint8Array(await blob.arrayBuffer()); const SR=[96000,88200,64000,48000,44100,32000,24000,22050,16000,12000,11025,8000,7350];
+  let p=0,n=0,need=Infinity;
+  while(p+7<=buf.length){
+    if(buf[p]!==0xFF||(buf[p+1]&0xF0)!==0xF0)break;
+    const fl=((buf[p+3]&3)<<11)|(buf[p+4]<<3)|(buf[p+5]>>5); if(fl<7)break;
+    if(need===Infinity)need=Math.ceil(secs*(SR[(buf[p+2]>>2)&15]||44100)/1024);
+    p+=fl; n++; if(n>=need)break;
+  }
+  return p>0&&p<buf.length?new Blob([buf.subarray(0,p)],{type:'audio/aac'}):blob;
+}
+
 /* ---------- Musikk: ambient (laget i appen) + egne filer (kun på enheten) ---------- */
 const IDB={
   db:null,
@@ -374,6 +459,7 @@ const MUS={
   async load(){this.tracks=(await IDB.all()).map(t=>({id:t.id,name:t.name,blob:t.blob})).sort((a,b)=>String(a.name).localeCompare(String(b.name),undefined,{numeric:true,sensitivity:'base'})); if(this.sel==='ambient'&&this.tracks.length&&store.get('cf_msel_user','0')!=='1'){this.sel=this.tracks[0].id;this.save()}},
   start(){
     if(!this.on){this.stop();return}
+    if(this.pv.id)this.stopPreview();
     this.running=true;
     let sel=this.sel; if(sel==='shuffle'){ if(!this.tracks.length)sel='ambient'; else sel=this.tracks[Math.floor(Math.random()*this.tracks.length)].id }
     if(sel!=='ambient'&&!this.tracks.find(t=>t.id===sel))sel='ambient';
@@ -421,10 +507,53 @@ const MUS={
   },
   stopFile(){if(this.audio){this.audio.pause();this.audio.removeAttribute('src');this.audio=null}this.fileGain=null;if(this.url){URL.revokeObjectURL(this.url);this.url=null}},
   async add(files){
-    let first=null;
-    for(const f of files){const id='m'+Date.now()+Math.random().toString(36).slice(2,6);const name=f.name.replace(/\.[^.]+$/,'');await IDB.put({id,name,blob:f});if(!first)first=id}
-    await this.load(); if(files.length===1)this.editing=first;   // én fil: be om navn med en gang
+    let first=null; const no=lang==='no';
+    for(const f of files){
+      const id='m'+Date.now()+Math.random().toString(36).slice(2,6);const name=f.name.replace(/\.[^.]+$/,'');
+      let blob=f;
+      // video (f.eks. fra CapCut): ta bare lyden, så filen blir liten og kan blandes med stemmen
+      if(/^video\//i.test(f.type)||/\.(mp4|mov|m4v|3gp|qt)$/i.test(f.name)){
+        try{toast(no?'Henter lyden ut av videoen …':'Getting the sound out of the video …')}catch(e){}
+        try{const x=await extractAac(f); if(x&&x.size>2000)blob=x}catch(e){}
+      }
+      try{await IDB.put({id,name,blob})}catch(e){try{toast(no?'Fikk ikke lagret filen (lite plass på telefonen?).':'Could not save the file (low storage?).')}catch(x){} continue}
+      if(!first)first=id;
+    }
+    await this.load(); if(files.length===1&&first)this.editing=first;   // én fil: be om navn med en gang
+    MUS.bad={}; buildMusicPanel();
+  },
+  bad:{},durs:{},chk:{},pv:{id:null,a:null,url:null},
+  stopPreview(){
+    const p=this.pv; if(p.id==='ambient')this.stopAmbient();
+    if(p.a){try{p.a.pause();p.a.removeAttribute('src')}catch(e){}}
+    if(p.url)URL.revokeObjectURL(p.url); this.pv={id:null,a:null,url:null};
+  },
+  /* spill av én sang alene, for å sjekke at den virker */
+  preview(id){
+    const was=this.pv.id; this.stopPreview(); if(was===id){buildMusicPanel();return}
+    if(TTS.playing){try{pauseTTS()}catch(e){}}
+    try{this.stop()}catch(e){}
+    this.pv.id=id;
+    if(id==='ambient'){this.startAmbient()}
+    else{
+      const t=this.tracks.find(x=>x.id===id); if(!t){this.pv.id=null;return}
+      const url=URL.createObjectURL(t.blob), a=new Audio(url); a.setAttribute('playsinline',''); a.loop=true;
+      this.pv={id,a,url};
+      a.onerror=()=>{if(this.pv.a===a){this.bad[id]=1;this.stopPreview();buildMusicPanel()}};
+      a.play().catch(()=>{if(this.pv.a===a){this.bad[id]=1;this.stopPreview();buildMusicPanel()}});
+    }
     buildMusicPanel();
+  },
+  /* hent lengden på en sang (og se om telefonen kan lese den) */
+  checkDur(tr){
+    if(this.durs[tr.id]||this.bad[tr.id]||this.chk[tr.id])return; this.chk[tr.id]=1;
+    try{
+      const url=URL.createObjectURL(tr.blob), a=new Audio(); a.preload='metadata';
+      const fin=()=>{URL.revokeObjectURL(url);document.querySelectorAll('[data-td="'+tr.id+'"]').forEach(e=>{const d=this.durs[tr.id];e.textContent=d?fmtT(d):'⚠';e.classList.toggle('bad',!d)})};
+      a.onloadedmetadata=()=>{this.durs[tr.id]=isFinite(a.duration)?a.duration:0;if(!this.durs[tr.id])this.bad[tr.id]=1;fin()};
+      a.onerror=()=>{this.bad[tr.id]=1;fin()};
+      a.src=url;
+    }catch(e){}
   },
   async remove(id){await IDB.del(id);if(this.sel===id)this.sel='ambient';await this.load();this.save();if(!remixCurrent()&&this.running)this.start();buildMusicPanel()}
 };
@@ -533,36 +662,42 @@ function fillMusic(box){
   box.appendChild(mk('div','mnote',t.vhint));
   // Musikk
   const h=mk('div','h'); h.style.marginTop='16px'; h.appendChild(mk('span','',t.music)); const sw=mk('div','sw'+(MUS.on?' on':'')); sw.onclick=()=>{MUS.on=!MUS.on;MUS.save();if(!remixCurrent()){if(MUS.on&&TTS.playing)MUS.start();else MUS.stop()}buildMusicPanel()}; h.appendChild(sw); box.appendChild(h);
-  const chips=mk('div','chips');
   const pick=val=>{MUS.sel=val;store.set('cf_msel_user','1');MUS.save();if(!remixCurrent()){if(TTS.playing&&MUS.on){MUS.stop();MUS.start()}}buildMusicPanel()};
-  const chip=(label,val)=>{const b=mk('button',MUS.sel===val?'on':'',label);b.onclick=()=>pick(val);return b};
-  chips.appendChild(chip(t.ambient,'ambient'));
-  if(MUS.tracks.length>1)chips.appendChild(chip(t.shuffle,'shuffle'));
-  box.appendChild(chips);
-  const v=mk('div','vol'); v.appendChild(mk('span','',t.vol)); const rg=mk('input'); rg.type='range'; rg.min='0'; rg.max='0.6'; rg.step='0.02'; rg.value=MUS.vol; rg.oninput=()=>MUS.setVol(+rg.value); rg.onchange=()=>remixCurrent(); v.appendChild(rg); box.appendChild(v);
-  if(MUS.tracks.length){
-    box.appendChild(mk('div','mlh',t.mylist));
-    const ul=mk('div','mlist');
-    MUS.tracks.forEach(tr=>{
-      const row=mk('div','mrow'+(MUS.sel===tr.id?' on':''));
-      if(MUS.editing===tr.id){
-        const inp=mk('input','mnm'); inp.type='text'; inp.value=tr.name; inp.placeholder=t.nameph; inp.maxLength=80;
-        const ok=mk('button','mb ok',t.save); ok.type='button'; const cn=mk('button','mb',t.cancel); cn.type='button';
-        const done=async()=>{const v=inp.value.trim(); MUS.editing=null; if(v&&v!==tr.name)await MUS.rename(tr.id,v); buildMusicPanel()};
-        ok.onclick=done; cn.onclick=()=>{MUS.editing=null;buildMusicPanel()};
-        inp.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();done()}else if(e.key==='Escape'){MUS.editing=null;buildMusicPanel()}};
-        row.append(inp,ok,cn);
-        setTimeout(()=>{if(inp.offsetParent){inp.focus();inp.select()}},30);
-      } else {
-        const nm=mk('button','nm',tr.name); nm.type='button'; nm.onclick=()=>pick(tr.id);
-        const ed=mk('button','mb','✎'); ed.type='button'; ed.title=t.rename; ed.setAttribute('aria-label',t.rename); ed.onclick=()=>{MUS.editing=tr.id;buildMusicPanel()};
-        const dl=mk('button','mb del','✕'); dl.type='button'; dl.onclick=()=>{if(confirm(t.delq+'\n'+tr.name))MUS.remove(tr.id)};
-        row.append(nm,ed,dl);
-      }
-      ul.appendChild(row);
-    });
-    box.appendChild(ul);
-  }
+  // ÉN felles liste: innebygd ambient, dine egne sanger (med ▶ for å prøve dem), og tilfeldig
+  const list=mk('div','mlist');
+  const mkRow=(id,name,own)=>{
+    const tr=own?MUS.tracks.find(x=>x.id===id):null;
+    const row=mk('div','mrow'+(MUS.sel===id?' on':''));
+    if(own&&MUS.editing===id){
+      const inp=mk('input','mnm'); inp.type='text'; inp.value=tr.name; inp.placeholder=t.nameph; inp.maxLength=80;
+      const ok=mk('button','mb ok',t.save); ok.type='button'; const cn=mk('button','mb',t.cancel); cn.type='button';
+      const done=async()=>{const v=inp.value.trim(); MUS.editing=null; if(v&&v!==tr.name)await MUS.rename(tr.id,v); buildMusicPanel()};
+      ok.onclick=done; cn.onclick=()=>{MUS.editing=null;buildMusicPanel()};
+      inp.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();done()}else if(e.key==='Escape'){MUS.editing=null;buildMusicPanel()}};
+      row.append(inp,ok,cn);
+      setTimeout(()=>{if(inp.offsetParent){inp.focus();inp.select()}},30);
+      return row;
+    }
+    if(id!=='shuffle'){
+      const on=MUS.pv.id===id;
+      const pv=mk('button','mb pv'+(on?' on':''),on?'❚❚':'▶'); pv.type='button'; pv.title=t.prev; pv.setAttribute('aria-label',t.prev); pv.onclick=e=>{e.stopPropagation();MUS.preview(id)};
+      row.appendChild(pv);
+    }
+    const nm=mk('button','nm',name); nm.type='button'; nm.onclick=()=>pick(id); row.appendChild(nm);
+    if(own){
+      const td=mk('span','td'+(MUS.bad[id]?' bad':'')); td.dataset.td=id; const d=MUS.durs[id]; td.textContent=MUS.bad[id]?'⚠':(d?fmtT(d):''); row.appendChild(td);
+      const ed=mk('button','mb','✎'); ed.type='button'; ed.title=t.rename; ed.setAttribute('aria-label',t.rename); ed.onclick=()=>{MUS.editing=id;buildMusicPanel()};
+      const dl=mk('button','mb del','✕'); dl.type='button'; dl.onclick=()=>{if(confirm(t.delq+'\n'+tr.name)){MUS.stopPreview();MUS.remove(id)}};
+      row.append(ed,dl); MUS.checkDur(tr);
+    }
+    return row;
+  };
+  list.appendChild(mkRow('ambient',t.ambient,false));
+  MUS.tracks.forEach(tr=>list.appendChild(mkRow(tr.id,tr.name,true)));
+  if(MUS.tracks.length>1)list.appendChild(mkRow('shuffle',t.shuffle,false));
+  box.appendChild(list);
+  if(MUS.tracks.some(x=>MUS.bad[x.id]))box.appendChild(mk('div','mnote bad',t.badnote));
+  const v=mk('div','vol'); v.style.marginTop='12px'; v.appendChild(mk('span','',t.vol)); const rg=mk('input'); rg.type='range'; rg.min='0'; rg.max='0.6'; rg.step='0.02'; rg.value=MUS.vol; rg.oninput=()=>MUS.setVol(+rg.value); rg.onchange=()=>remixCurrent(); v.appendChild(rg); box.appendChild(v);
   const add=mk('label','addm',t.addm); const fi=mk('input'); fi.type='file'; fi.accept='audio/*,video/*'; fi.multiple=true; fi.style.display='none'; fi.onchange=()=>{if(fi.files.length)MUS.add([...fi.files])}; add.appendChild(fi); box.appendChild(add);
   box.appendChild(mk('div','mnote',t.mnote));
   if(!pickVoice(TTS.lang)&&speechSynthesis.getVoices().length)box.appendChild(mk('div','mnote',t.nov));
